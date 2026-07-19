@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:gemini": "tsx scripts/test-gemini.ts",
-    "hwpx:poc": "tsx scripts/hwpx-poc.ts"
+    "hwpx:poc": "tsx scripts/hwpx-poc.ts",
+    "hwpx:listening-poc": "tsx scripts/hwpx-listening-poc.ts"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",

@@ -33,8 +33,9 @@
 ## 데이터 모델 (`src/lib/types.ts`)
 
 `ExamSet { metadata, listening: ListeningItem[17], reading: ReadingItem[28] }`
-- `ListeningItem`: number, type, speakers(M/W/Narrator), script(화자별 대사 분리), choices, answer, explanation, imageRef?, pairGroupId?
+- `ListeningItem`: number, type(유형명), instruction(시험지 지시문 전체 문장), speakers(M/W/Narrator), script(화자별 대사 분리), scriptKo(script와 1:1 대응하는 한국어 해석), choices, answer, explanation, imageRef?, pairGroupId?
 - `ReadingItem`: number, type, passage, chartData?, choices(또는 40번 pairChoices), answer, explanation, keyVocab?, pairGroupId?
+  - ⚠️ `ReadingItem`에는 `ListeningItem.instruction`에 대응하는 "지시문 전체 문장" 필드가 아직 없음 — 독해 섹션 HWPX 작업 시작 전에 필요 여부 재검토
 
 전체 필드 정의는 설계스펙 문서 3절 참고.
 
@@ -59,7 +60,7 @@
 |---|---|---|
 | 1 | Gemini 문항 생성 모듈 (JSON 스키마 강제) + BYOK API 키 입력 UI | 완료 |
 | 2 | HWPX 템플릿 조각 추출 + 텍스트 치환 PoC (문항 1개) | 완료 |
-| 3 | HWPX 전체 문항 반복 삽입 + 이미지 삽입 (45문항) | 예정 |
+| 3 | HWPX 전체 문항 반복 삽입 + 이미지 삽입 (45문항) | **듣기 1-17번만 완료** — 독해 18-45번은 블로킹(아래 참고) |
 | 4 | Google Cloud TTS 개별 클립 생성 | 예정 |
 | 5 | ffmpeg 병합 (신호음/정적구간 포함) | 예정 |
 | 6 | PDF 렌더러 구축 | 예정 |
@@ -75,18 +76,34 @@
 GEMINI_API_KEY=                    # scripts/test-gemini.ts 전용 (앱 런타임과 무관)
 ```
 
-## HWPX 템플릿 (Phase 2 결과, 설계스펙 6절)
+## HWPX 템플릿 (Phase 2·3 결과, 설계스펙 6절)
 
 - 실제 이언어학원 템플릿 `고등부.hwpx`를 압축 해제해 `templates/hwpx-template/`에 원본 그대로 보관 (mimetype, Contents/*, BinData/*, Preview/*, META-INF/*, settings.xml)
 - `Contents/section0.xml`이 실제 문항 본문. **듣기 문항의 영어 대본/한국어 해석/정답/해설은 문제 번호 텍스트 뒤에 각주(`hp:endNote`)로 숨겨져 있는 구조** — 화면에는 문제 지시문만 보이고, 각주를 펼치면 대본·해석·정답·해설이 나옴
-- ⚠️ **타입 갭 발견**: 실제 템플릿은 영어 대본과 별도로 한국어 해석을 포함하지만, 현재 `ListeningItem` 타입(설계스펙 3절)에는 한국어 해석 필드가 없음 — Gemini 프롬프트/타입에 `scriptKo` 같은 필드 추가가 필요(Phase 3 전에 결정 필요)
-- `templates/hwpx-template/fragments/listening-single-line.template.xml` — 1번 문항(단일 화자, 대사 1줄) 조각에서 텍스트만 `{{PLACEHOLDER}}`로 치환한 파라미터화 템플릿. 대화 2턴 이상/여러 줄 대본 문항 일반화는 Phase 3에서 처리
+- `ListeningItem.scriptKo: string[]`, `ListeningItem.instruction: string` — 각각 한국어 해석, 시험지 지시문 전체 문장. Gemini 프롬프트(`listeningPrompt.ts`)에도 생성 지시 반영 완료
+
+### ⚠️ Phase 3 진행 중 발견한 중요 블로커: 독해(18-45) 템플릿 없음
+
+업로드된 `고등부.hwpx`에는 **듣기 1-17번만 있고 독해 18-45번 구간이 아예 없음** (`section0.xml`을 전수 분석해 확인 — 총 top-level 문단 167개가 모두 표지+듣기17문항+"정답" 라벨로 끝남). 독해 섹션의 2단 편집/지문/도표/장문 레이아웃을 그대로 재현하려면 **독해 구간이 포함된 실제 템플릿 파일이 별도로 필요**하다. 받기 전까지 독해 HWPX 조립은 진행 불가.
+
+### Phase 3 완료 범위: 듣기 1-17번 전체 조립
+
+- `templates/hwpx-template/fragments/`:
+  - `listening-line.template.xml` — 대본 한 줄(영/한 공용) 조각. 원본의 복잡한 캐시된 `lineseg` 배열 대신 선택지 문단과 동일한 단순 1-lineseg 스타일 사용(한글이 열 때 재계산하는 것으로 확인됨, Phase 2 PoC로 검증됨)
+  - `listening-item.template.xml` — 1~15번 공용(단일 문항, `endNote` 1개). `%%SCRIPT_LINES_EN%%`/`%%SCRIPT_LINES_KO%%`는 위 line 템플릿을 대사 개수만큼 이어붙여 채움
+  - `listening-1617-pair.template.xml` — 16-17번 전용(공통 지문 1개 + 문항 2개). 대본은 16번 데이터만 사용
 - `src/lib/hwpx/` (Node 전용, `tsconfig.app.json`에서 제외돼 브라우저 번들에는 포함 안 됨):
-  - `paths.ts` — 템플릿 경로 상수
-  - `textUtils.ts` — XML 텍스트 이스케이프, 숫자→원문자(①~⑤) 변환
-  - `listeningFragment.ts` — 플레이스홀더 치환으로 문항 조각 XML 렌더링
-  - `buildHwpx.ts` — `section0.xml`에서 1번 문항 마커로 경계를 찾아 치환하고 `jszip`으로 재압축 (mimetype은 STORE로 맨 처음에 추가)
-- `scripts/hwpx-poc.ts` (`npm run hwpx:poc -- <출력경로>`) — 테스트 문항 데이터로 1번 문항만 치환한 `.hwpx` 파일 생성, 원본과 뚜렷이 구분되는 소재로 검증
+  - `paths.ts`, `textUtils.ts` — 경로 상수, XML 이스케이프/원문자 변환
+  - `listeningFragment.ts` — Phase 2 PoC(1번 문항 단일 치환)용, 유지
+  - `listeningSection.ts` — **Phase 3 핵심**. `buildListeningSectionXml(listening: ListeningItem[])`이 17문항 전체를 조립
+  - `buildHwpx.ts` — `buildListeningPoCHwpx`(Phase 2, 문항 1개) + `buildListeningExamHwpx`(Phase 3, 듣기 섹션 전체 교체, `jszip` 재압축·mimetype STORE 유지)
+- `scripts/hwpx-poc.ts` (`npm run hwpx:poc -- <경로>`, 문항 1개), `scripts/hwpx-listening-poc.ts` (`npm run hwpx:listening-poc -- <경로>`, 17문항 전체) — 둘 다 원본과 뚜렷이 구분되는 테스트 데이터로 검증됨(mimetype STORED, XML 유효성, 신규/원본 내용 대조, 표지·문서 끝부분 보존 확인)
+
+### 알려진 단순화(추후 보강 필요)
+
+- **4번(그림 불일치)**: 원본은 그림 위에 ①~⑤ 위치 라벨이 찍힌 이미지 문제. 지금은 표준 텍스트 5지선다로 대체(`imageRef`는 정보용 문자열일 뿐 실제 이미지 삽입 없음) — 실제 그림 생성/삽입 파이프라인 필요
+- **10번(표 문제)**: 원본은 비교표(호텔 등) 삽입. 지금은 표준 텍스트 5지선다로 대체 — 구조화된 표 데이터 필드와 표 렌더링 로직 필요
+- **11-17번 "▪선택지해석"(영어 선택지의 한국어 번역) 블록**: 원본엔 있지만 `Choice` 타입에 선택지 번역 필드가 없어 생성물에서는 생략됨
 
 ## 폴더 구조 (목표)
 
@@ -98,9 +115,9 @@ src/
 │   ├── gemini.ts       # Gemini 호출(사용자 apiKey 인자) + JSON 파싱/검증
 │   ├── prompts/        # listeningPrompt.ts, readingPrompt.ts
 │   ├── types.ts        # ExamSet 등 타입 정의
-│   └── hwpx/           # (Node 전용, 브라우저 번들 제외) HWPX 조립 — paths/textUtils/listeningFragment/buildHwpx
+│   └── hwpx/           # (Node 전용, 브라우저 번들 제외) HWPX 조립 — paths/textUtils/listeningFragment/listeningSection/buildHwpx
 ├── App.tsx / main.tsx
-scripts/                # test-gemini.ts, hwpx-poc.ts (개발용 Node CLI 테스트)
+scripts/                # test-gemini.ts, hwpx-poc.ts, hwpx-listening-poc.ts (개발용 Node CLI 테스트)
 netlify/functions/      # generate-audio, merge-audio-background, export-hwpx, export-pdf (TTS 키는 요청 시점 일회성 전달)
 templates/
 ├── hwpx-template/      # 고등부.hwpx 압축 해제본 원본 + fragments/(파라미터화된 문항 조각 템플릿)

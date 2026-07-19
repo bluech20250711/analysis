@@ -10,9 +10,11 @@ export type Speaker = 'M' | 'W' | 'Narrator';
 
 export interface ListeningItem {
   number: number; // 1~17
-  type: string;
+  type: string; // 유형명(예: "목적 파악") — 짧은 분류 라벨
+  instruction: string; // 실제 시험지에 인쇄되는 지시문 전체 문장(예: "다음을 듣고, 남자가 하는 말의 목적으로 가장 적절한 것을 고르시오.")
   speakers: Speaker[];
   script: { speaker: Speaker; line: string }[];
+  scriptKo: string[]; // script와 1:1 대응하는 한국어 해석 (실제 시험지 각주에 원문과 함께 삽입됨)
   choices: Choice[];
   answer: number;
   explanation: string;
