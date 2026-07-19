@@ -24,7 +24,7 @@
 | 프론트엔드 | React + Vite + TypeScript + Tailwind |
 | 문항 생성 AI | Gemini API (`gemini-2.5-pro` 또는 flash 계열) |
 | TTS | Google Cloud Text-to-Speech (Chirp3-HD / Neural2) |
-| 서버리스 백엔드 | Netlify Functions (Node.js) — API 키 보호, HWPX/PDF/오디오 병합 |
+| 서버리스 백엔드 | Netlify Functions (Node.js) — HWPX/PDF/오디오 병합 (API 키는 보관하지 않음, BYOK 참고) |
 | HWPX 생성 | Node.js + `jszip` (XML 템플릿 주입), mimetype은 반드시 STORED |
 | PDF 생성 | `@react-pdf/renderer` 또는 Puppeteer 서버리스 함수 |
 | 오디오 병합 | `ffmpeg` (`ffmpeg-static`) — Background Function 필요 (동기 함수 10초 제한) |
@@ -38,9 +38,18 @@
 
 전체 필드 정의는 설계스펙 문서 3절 참고.
 
+## API 키 관리 방식 — BYOK (설계스펙 9절)
+
+- 로그인 없는 멀티유저 도구이므로 서버(.env)에 공용 키를 두지 않고, **각 사용자가 자신의 Gemini/TTS 키를 앱 화면에서 직접 입력**
+- 입력된 키는 브라우저 `localStorage`에만 저장 (서버 전송/저장 없음) — `src/lib/apiKeyStorage.ts`
+- Gemini 호출은 **브라우저에서 사용자 키로 직접** 수행 (`src/lib/gemini.ts`가 `apiKey`를 인자로 받음) — 서버 프록시 불필요
+- TTS처럼 서버 리소스(ffmpeg 등)가 필요한 작업만 사용자의 TTS 키를 요청에 실어 그 호출 시점에만 일회성 사용(저장 안 함)
+- 키 입력 필드는 `type="password"` 마스킹, 콘솔/에러 로그에 키 값 노출 금지, 생성된 지문 등은 `dangerouslySetInnerHTML` 사용 금지(XSS 방지)
+- 키가 없을 때 문항 생성 시도 시 안내 메시지와 함께 설정 화면(`ApiKeySettings`)으로 유도
+
 ## 전체 데이터 흐름
 
-옵션 선택 → Gemini(듣기 1-17) → Gemini(독해 18-34) → Gemini(독해 35-45, 장문 포함)
+옵션 선택 → Gemini(듣기 1-17, 브라우저에서 사용자 키로 직접 호출) → Gemini(독해 18-34) → Gemini(독해 35-45, 장문 포함)
 → 듣기 대본 화자별 TTS → ffmpeg 병합(안내멘트/신호음/정적구간) → 최종 MP3
 → 문항 JSON을 HWPX 템플릿에 주입 + PDF 렌더러에 주입 → 시험지.hwpx / 시험지.pdf / 듣기평가.mp3 다운로드
 
@@ -48,7 +57,7 @@
 
 | Phase | 내용 | 상태 |
 |---|---|---|
-| 1 | Gemini 문항 생성 모듈 (JSON 스키마 강제, 콘솔 출력 확인) | 진행 중 |
+| 1 | Gemini 문항 생성 모듈 (JSON 스키마 강제) + BYOK API 키 입력 UI | 진행 중 |
 | 2 | HWPX 템플릿 조각 추출 + 텍스트 치환 PoC (문항 1개) | 예정 |
 | 3 | HWPX 전체 문항 반복 삽입 + 이미지 삽입 (45문항) | 예정 |
 | 4 | Google Cloud TTS 개별 클립 생성 | 예정 |
@@ -60,23 +69,24 @@
 
 ## 환경변수
 
+앱 자체는 서버 환경변수로 API 키를 보관하지 않는다(BYOK). 아래는 개발용 Node CLI 테스트 스크립트(`scripts/test-gemini.ts`) 전용:
+
 ```
-GEMINI_API_KEY=                    # Phase 1부터 필요
-GOOGLE_CLOUD_TTS_API_KEY=          # Phase 4부터 필요
-GOOGLE_CLOUD_PROJECT_ID=           # Phase 4부터 필요
+GEMINI_API_KEY=                    # scripts/test-gemini.ts 전용 (앱 런타임과 무관)
 ```
 
 ## 폴더 구조 (목표)
 
 ```
 src/
-├── components/        # ExamOptionsForm, GenerationProgress, DownloadPanel
+├── components/        # ApiKeySettings, ExamOptionsForm, GenerationProgress, DownloadPanel
 ├── lib/
-│   ├── gemini.ts       # Gemini 호출 + JSON 파싱/검증
+│   ├── apiKeyStorage.ts  # localStorage 기반 Gemini/TTS 키 read/write
+│   ├── gemini.ts       # Gemini 호출(사용자 apiKey 인자) + JSON 파싱/검증
 │   ├── prompts/        # listeningPrompt.ts, readingPrompt.ts
 │   └── types.ts        # ExamSet 등 타입 정의
 ├── App.tsx / main.tsx
-netlify/functions/      # generate-questions, generate-audio, merge-audio-background, export-hwpx, export-pdf
+netlify/functions/      # generate-audio, merge-audio-background, export-hwpx, export-pdf (TTS 키는 요청 시점 일회성 전달)
 templates/              # hwpx-template(고등부.hwpx 압축 해제본), pdf-template
 docs/                   # 원본 설계 문서 2건 보관
 ```

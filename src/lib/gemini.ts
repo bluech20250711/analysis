@@ -7,10 +7,9 @@ import { buildReadingSystemPrompt, type ReadingRange } from './prompts/readingPr
 const MODEL = 'gemini-2.5-pro';
 const MAX_ATTEMPTS = 3; // 최초 시도 + 최대 2회 재시도
 
-function getClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다. .env 파일을 확인하세요.');
+function getClient(apiKey: string): GoogleGenAI {
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error('Gemini API 키가 없습니다. 설정 화면에서 API 키를 먼저 입력해주세요.');
   }
   return new GoogleGenAI({ apiKey });
 }
@@ -175,8 +174,8 @@ function normalizeReadingItem(raw: z.infer<typeof readingItemRawZod>): ReadingIt
   };
 }
 
-export async function generateListening(options: ExamOptions): Promise<ListeningItem[]> {
-  const client = getClient();
+export async function generateListening(apiKey: string, options: ExamOptions): Promise<ListeningItem[]> {
+  const client = getClient(apiKey);
   const systemInstruction = buildListeningSystemPrompt(options);
 
   return callGeminiJson(
@@ -195,11 +194,12 @@ export async function generateListening(options: ExamOptions): Promise<Listening
 }
 
 export async function generateReading(
+  apiKey: string,
   options: ExamOptions,
   range: ReadingRange,
   usedTopics: string[] = [],
 ): Promise<ReadingItem[]> {
-  const client = getClient();
+  const client = getClient(apiKey);
   const systemInstruction = buildReadingSystemPrompt(options, range, usedTopics);
   const expectedCount = range === '18-34' ? 17 : 11;
 
@@ -222,10 +222,10 @@ function extractTopics(reading: ReadingItem[]): string[] {
   return reading.map((item) => `${item.number}번(${item.type}): ${item.passage.slice(0, 40)}...`);
 }
 
-export async function generateExamSet(options: ExamOptions): Promise<ExamSet> {
-  const listening = await generateListening(options);
-  const reading1834 = await generateReading(options, '18-34', []);
-  const reading3545 = await generateReading(options, '35-45', extractTopics(reading1834));
+export async function generateExamSet(apiKey: string, options: ExamOptions): Promise<ExamSet> {
+  const listening = await generateListening(apiKey, options);
+  const reading1834 = await generateReading(apiKey, options, '18-34', []);
+  const reading3545 = await generateReading(apiKey, options, '35-45', extractTopics(reading1834));
 
   return {
     metadata: {
