@@ -78,6 +78,7 @@ const readingItemSchema: Schema = {
     type: { type: Type.STRING },
     instruction: { type: Type.STRING },
     passage: { type: Type.STRING },
+    passageKo: { type: Type.STRING },
     chartData: { ...readingTableSchema, nullable: true },
     choices: { type: Type.ARRAY, items: choiceSchema, nullable: true },
     pairChoices: {
@@ -99,7 +100,7 @@ const readingItemSchema: Schema = {
     imageRef: { type: Type.STRING, nullable: true },
     pairGroupId: { type: Type.STRING, nullable: true },
   },
-  required: ['number', 'type', 'instruction', 'passage', 'answer', 'explanation'],
+  required: ['number', 'type', 'instruction', 'passage', 'passageKo', 'answer', 'explanation'],
 };
 
 const listeningResponseSchema: Schema = {
@@ -149,6 +150,7 @@ const readingItemRawZod = z.object({
   type: z.string(),
   instruction: z.string(),
   passage: z.string(),
+  passageKo: z.string(),
   chartData: readingTableZod.nullable().optional(),
   choices: z.array(choiceZod).nullable().optional(),
   pairChoices: z.tuple([z.array(choiceZod), z.array(choiceZod)]).nullable().optional(),
@@ -204,6 +206,7 @@ function normalizeReadingItem(raw: z.infer<typeof readingItemRawZod>): ReadingIt
     type: raw.type,
     instruction: raw.instruction,
     passage: raw.passage,
+    passageKo: raw.passageKo,
     chartData: raw.chartData
       ? { ...raw.chartData, caption: raw.chartData.caption ?? undefined }
       : undefined,
