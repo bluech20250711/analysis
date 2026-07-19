@@ -8,12 +8,14 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:gemini": "tsx scripts/test-gemini.ts"
+    "test:gemini": "tsx scripts/test-gemini.ts",
+    "hwpx:poc": "tsx scripts/hwpx-poc.ts"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
     "@tailwindcss/vite": "^4.3.3",
     "dotenv": "^17.4.2",
+    "jszip": "^3.10.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tailwindcss": "^4.3.3",
@@ -21,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/jszip": "^3.4.0",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

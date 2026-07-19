@@ -57,8 +57,8 @@
 
 | Phase | 내용 | 상태 |
 |---|---|---|
-| 1 | Gemini 문항 생성 모듈 (JSON 스키마 강제) + BYOK API 키 입력 UI | 진행 중 |
-| 2 | HWPX 템플릿 조각 추출 + 텍스트 치환 PoC (문항 1개) | 예정 |
+| 1 | Gemini 문항 생성 모듈 (JSON 스키마 강제) + BYOK API 키 입력 UI | 완료 |
+| 2 | HWPX 템플릿 조각 추출 + 텍스트 치환 PoC (문항 1개) | 완료 |
 | 3 | HWPX 전체 문항 반복 삽입 + 이미지 삽입 (45문항) | 예정 |
 | 4 | Google Cloud TTS 개별 클립 생성 | 예정 |
 | 5 | ffmpeg 병합 (신호음/정적구간 포함) | 예정 |
@@ -75,6 +75,19 @@
 GEMINI_API_KEY=                    # scripts/test-gemini.ts 전용 (앱 런타임과 무관)
 ```
 
+## HWPX 템플릿 (Phase 2 결과, 설계스펙 6절)
+
+- 실제 이언어학원 템플릿 `고등부.hwpx`를 압축 해제해 `templates/hwpx-template/`에 원본 그대로 보관 (mimetype, Contents/*, BinData/*, Preview/*, META-INF/*, settings.xml)
+- `Contents/section0.xml`이 실제 문항 본문. **듣기 문항의 영어 대본/한국어 해석/정답/해설은 문제 번호 텍스트 뒤에 각주(`hp:endNote`)로 숨겨져 있는 구조** — 화면에는 문제 지시문만 보이고, 각주를 펼치면 대본·해석·정답·해설이 나옴
+- ⚠️ **타입 갭 발견**: 실제 템플릿은 영어 대본과 별도로 한국어 해석을 포함하지만, 현재 `ListeningItem` 타입(설계스펙 3절)에는 한국어 해석 필드가 없음 — Gemini 프롬프트/타입에 `scriptKo` 같은 필드 추가가 필요(Phase 3 전에 결정 필요)
+- `templates/hwpx-template/fragments/listening-single-line.template.xml` — 1번 문항(단일 화자, 대사 1줄) 조각에서 텍스트만 `{{PLACEHOLDER}}`로 치환한 파라미터화 템플릿. 대화 2턴 이상/여러 줄 대본 문항 일반화는 Phase 3에서 처리
+- `src/lib/hwpx/` (Node 전용, `tsconfig.app.json`에서 제외돼 브라우저 번들에는 포함 안 됨):
+  - `paths.ts` — 템플릿 경로 상수
+  - `textUtils.ts` — XML 텍스트 이스케이프, 숫자→원문자(①~⑤) 변환
+  - `listeningFragment.ts` — 플레이스홀더 치환으로 문항 조각 XML 렌더링
+  - `buildHwpx.ts` — `section0.xml`에서 1번 문항 마커로 경계를 찾아 치환하고 `jszip`으로 재압축 (mimetype은 STORE로 맨 처음에 추가)
+- `scripts/hwpx-poc.ts` (`npm run hwpx:poc -- <출력경로>`) — 테스트 문항 데이터로 1번 문항만 치환한 `.hwpx` 파일 생성, 원본과 뚜렷이 구분되는 소재로 검증
+
 ## 폴더 구조 (목표)
 
 ```
@@ -84,10 +97,14 @@ src/
 │   ├── apiKeyStorage.ts  # localStorage 기반 Gemini/TTS 키 read/write
 │   ├── gemini.ts       # Gemini 호출(사용자 apiKey 인자) + JSON 파싱/검증
 │   ├── prompts/        # listeningPrompt.ts, readingPrompt.ts
-│   └── types.ts        # ExamSet 등 타입 정의
+│   ├── types.ts        # ExamSet 등 타입 정의
+│   └── hwpx/           # (Node 전용, 브라우저 번들 제외) HWPX 조립 — paths/textUtils/listeningFragment/buildHwpx
 ├── App.tsx / main.tsx
+scripts/                # test-gemini.ts, hwpx-poc.ts (개발용 Node CLI 테스트)
 netlify/functions/      # generate-audio, merge-audio-background, export-hwpx, export-pdf (TTS 키는 요청 시점 일회성 전달)
-templates/              # hwpx-template(고등부.hwpx 압축 해제본), pdf-template
+templates/
+├── hwpx-template/      # 고등부.hwpx 압축 해제본 원본 + fragments/(파라미터화된 문항 조각 템플릿)
+└── pdf-template/       # 예정 (Phase 6)
 docs/                   # 원본 설계 문서 2건 보관
 ```
 
