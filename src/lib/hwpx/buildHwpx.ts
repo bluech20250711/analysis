@@ -5,6 +5,7 @@ import type { ListeningItem } from '../types';
 import { HWPX_TEMPLATE_DIR, SECTION0_PATH } from './paths';
 import { renderListeningItemFragment, type ListeningFragmentData } from './listeningFragment';
 import { buildListeningSectionXml } from './listeningSection';
+import { wrapInTwoColumnTable } from './readingSection';
 
 // 원본 고등부.hwpx의 1번 문항 조각 경계를 찾기 위한 마커.
 // (실제 텍스트를 앵커로 삼아 위치를 찾는다 — Phase 3에서 여러 문항을 다룰 때는
@@ -104,6 +105,27 @@ export async function buildListeningExamHwpx(listening: ListeningItem[]): Promis
 
   const newListeningXml = await buildListeningSectionXml(listening);
   const newSection0 = originalSection0.slice(0, start) + newListeningXml + originalSection0.slice(end);
+
+  const zip = new JSZip();
+  await addTemplateFilesToZip(zip);
+  zip.file('Contents/section0.xml', newSection0);
+
+  return zip.generateAsync({ type: 'nodebuffer', platform: 'UNIX' });
+}
+
+// 독해(18-45번) 섹션 PoC: 원본 문서(표지+듣기 1-17번)는 그대로 두고,
+// 문서 맨 끝에 새 2단 편집 독해 섹션을 추가한다.
+// 실제 이언어학원 독해 템플릿이 없어(CLAUDE.md 참고) 처음부터 새로 구성한 레이아웃이다.
+export async function buildReadingSectionPoCHwpx(leftColumnXml: string, rightColumnXml: string): Promise<Buffer> {
+  await stat(SECTION0_PATH);
+  const originalSection0 = await readFile(SECTION0_PATH, 'utf-8');
+
+  const closingTagIdx = originalSection0.lastIndexOf('</hs:sec>');
+  if (closingTagIdx === -1) throw new Error('section0.xml에서 </hs:sec> 종료 태그를 찾을 수 없습니다.');
+
+  const readingSectionXml = wrapInTwoColumnTable(leftColumnXml, rightColumnXml);
+  const newSection0 =
+    originalSection0.slice(0, closingTagIdx) + readingSectionXml + originalSection0.slice(closingTagIdx);
 
   const zip = new JSZip();
   await addTemplateFilesToZip(zip);

@@ -11,7 +11,8 @@
     "test:gemini": "tsx scripts/test-gemini.ts",
     "hwpx:poc": "tsx scripts/hwpx-poc.ts",
     "hwpx:listening-poc": "tsx scripts/hwpx-listening-poc.ts",
-    "test:tts": "tsx scripts/test-tts.ts"
+    "test:tts": "tsx scripts/test-tts.ts",
+    "hwpx:reading-poc": "tsx scripts/hwpx-reading-poc.ts"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
