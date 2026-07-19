@@ -1,10 +1,17 @@
 import { writeFile } from 'node:fs/promises';
 import { buildReadingSectionPoCHwpx } from '../src/lib/hwpx/buildHwpx';
-import { renderStandardReadingItem, renderTableReadingItem, distributeIntoColumns } from '../src/lib/hwpx/readingSection';
+import {
+  renderStandardReadingItem,
+  renderChartReadingItem,
+  renderNoticeReadingItem,
+  distributeIntoColumns,
+} from '../src/lib/hwpx/readingSection';
 import type { ReadingItem } from '../src/lib/types';
 
-// 독해 섹션 PoC: 18번(표준형) + 25번(도표형) 2문항을 2단 편집 레이아웃으로 조립한다.
-// 실제 이언어학원 독해 템플릿이 없어(CLAUDE.md 참고) 처음부터 새로 구성한 레이아웃 검증용.
+// 독해 섹션 PoC: 18번(표준형) + 25번(도표형) + 27번(안내문, 테두리 박스) 3문항을
+// 2단 편집 레이아웃으로 조립한다. 실제 이언어학원 독해 템플릿이 없어(CLAUDE.md 참고)
+// 실제 수능 영어영역 문제지 PDF에서 뽑은 레이아웃 형식(여백/컬럼/박스 스타일)을 참고해
+// 처음부터 새로 구성한 레이아웃 검증용 — 지문/문항 내용은 전부 창작 데이터.
 
 const item18: ReadingItem = {
   number: 18,
@@ -63,6 +70,40 @@ const item25: ReadingItem = {
   ],
 };
 
+const item27: ReadingItem = {
+  number: 27,
+  type: '실용문 내용 일치/불일치',
+  instruction: 'Maple Town Photo Contest에 관한 다음 안내문의 내용과 일치하지 않는 것은?',
+  passage:
+    'Maple Town is hosting its annual community photo contest. Share your best shots of local scenery and win great prizes!',
+  chartData: {
+    caption: 'Maple Town Photo Contest',
+    headers: ['항목', '내용'],
+    rows: [
+      ['마감일', '2026년 3월 20일'],
+      ['참가 대상', 'Maple Town 주민 누구나'],
+      ['제출 방법', '웹사이트를 통한 온라인 제출만 가능'],
+      ['1인 제출 한도', '최대 3장'],
+      ['시상', '대상 1명에게 상금 100달러 지급'],
+    ],
+  },
+  choices: [
+    { number: 1, text: '마감일은 2026년 3월 20일이다.' },
+    { number: 2, text: 'Maple Town 주민이면 누구나 참가할 수 있다.' },
+    { number: 3, text: '우편으로도 제출할 수 있다.' },
+    { number: 4, text: '1인당 최대 3장까지 제출 가능하다.' },
+    { number: 5, text: '대상 수상자는 상금 100달러를 받는다.' },
+  ],
+  answer: 3,
+  explanation:
+    "안내문에 따르면 제출은 웹사이트를 통한 온라인 제출만 가능하다고 명시되어 있으므로, 안내문의 내용과 일치하지 않는 것은 ③ '우편으로도 제출할 수 있다.'이다.",
+  keyVocab: [
+    { word: 'contest', meaning: '대회' },
+    { word: 'submission', meaning: '제출' },
+    { word: 'resident', meaning: '주민' },
+  ],
+};
+
 async function main() {
   const outPath = process.argv[2];
   if (!outPath) {
@@ -70,9 +111,13 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('[hwpx-reading-poc] 독해 18번+25번 조립 중...');
+  console.log('[hwpx-reading-poc] 독해 18번+25번+27번 조립 중...');
 
-  const fragments = [renderStandardReadingItem(item18), renderTableReadingItem(item25)];
+  const fragments = [
+    renderStandardReadingItem(item18),
+    renderChartReadingItem(item25),
+    renderNoticeReadingItem(item27),
+  ];
   const { left, right } = distributeIntoColumns(fragments);
 
   const buffer = await buildReadingSectionPoCHwpx(left, right);

@@ -109,6 +109,20 @@ function trailingSpacer(width: number): string {
   return emptyParagraph(width) + emptyParagraph(width);
 }
 
+// 실제 수능 영어영역 문제지(PDF 형식 참고)에서 확인된 패턴: "주어진 글"/공유 지문/
+// 안내문 등은 테두리 박스로 감싸 시각적으로 구분한다. 1행 1열 표(테두리=bodyBorderFillId)로
+// 구현하며, 듣기 섹션의 안내 상자(listening-item.template.xml 최상단)와 동일한 방식이다.
+function wrapInBorderedBox(innerXml: string, width: number): string {
+  const tblId = nextId();
+  const boxBorderFillId = READING_STYLE.bodyBorderFillId;
+  return `<hp:p id="0" paraPrIDRef="${READING_STYLE.defaultParaPrId}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${READING_STYLE.bodyCharPrId}"><hp:tbl id="${tblId}" zOrder="1" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="${boxBorderFillId}" noAdjust="0"><hp:sz width="${width}" widthRelTo="ABSOLUTE" height="1000" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="141" bottom="141"/><hp:inMargin left="400" right="400" top="283" bottom="283"/><hp:tr><hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="${boxBorderFillId}"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${innerXml}</hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="${width}" height="1000"/><hp:cellMargin left="400" right="400" top="283" bottom="283"/></hp:tc></hp:tr></hp:tbl><hp:t/></hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="800" textheight="800" baseline="680" spacing="480" horzpos="0" horzsize="${width}" flags="393216"/></hp:linesegarray></hp:p>`;
+}
+
+// 박스 안 콘텐츠가 쓸 수 있는 실제 폭(좌우 셀 여백 400씩 제외)
+function boxInnerWidth(width: number): number {
+  return width - 800;
+}
+
 // 18-24, 26, 29-39 등 표준형: 지시문 + 지문 + 5지선다
 export function renderStandardReadingItem(item: ReadingItem, width = READING_STYLE.columnWidth): string {
   if (Array.isArray(item.choices) === false) {
@@ -125,10 +139,11 @@ export function renderStandardReadingItem(item: ReadingItem, width = READING_STY
   );
 }
 
-// 25번(도표)/27-28번(안내문): 표준형 + 표
-export function renderTableReadingItem(item: ReadingItem, width = READING_STYLE.columnWidth): string {
+// 25번(도표): 표준형 + 표. 실제 시험지는 막대그래프 "이미지"이지만 이미지 생성 파이프라인이
+// 없어 표로 대체한다(테두리 박스 없이 배치 — PDF 참고 결과 25번 도표는 박스로 감싸지 않음).
+export function renderChartReadingItem(item: ReadingItem, width = READING_STYLE.columnWidth): string {
   if (!item.chartData) {
-    throw new Error(`${item.number}번: chartData가 필요합니다(25/27/28번 전용 렌더러).`);
+    throw new Error(`${item.number}번: chartData가 필요합니다(25번 전용 렌더러).`);
   }
   if (Array.isArray(item.choices) === false) {
     throw new Error(`${item.number}번: choices가 배열이어야 합니다.`);
@@ -138,8 +153,33 @@ export function renderTableReadingItem(item: ReadingItem, width = READING_STYLE.
 
   return (
     stemParagraph(item, width) +
-    passageParagraphs(item.passage, width) +
     tableWrapperParagraph(tableXml, width, item.chartData.caption) +
+    passageParagraphs(item.passage, width) +
+    choicesXml(item.choices as Choice[], width) +
+    trailingSpacer(width)
+  );
+}
+
+// 27-28번(안내문): 제목+표를 테두리 박스로 감싼다(PDF 참고 결과 안내문은 박스로 구분됨).
+export function renderNoticeReadingItem(item: ReadingItem, width = READING_STYLE.columnWidth): string {
+  if (!item.chartData) {
+    throw new Error(`${item.number}번: chartData가 필요합니다(27/28번 전용 렌더러).`);
+  }
+  if (Array.isArray(item.choices) === false) {
+    throw new Error(`${item.number}번: choices가 배열이어야 합니다.`);
+  }
+
+  const innerWidth = boxInnerWidth(width);
+  const tableXml = buildDataTableXml(item.chartData, innerWidth);
+  const noticeBoxXml = wrapInBorderedBox(
+    tableWrapperParagraph(tableXml, innerWidth, item.chartData.caption),
+    width,
+  );
+
+  return (
+    stemParagraph(item, width) +
+    passageParagraphs(item.passage, width) +
+    noticeBoxXml +
     choicesXml(item.choices as Choice[], width) +
     trailingSpacer(width)
   );
@@ -170,11 +210,12 @@ export function renderSummaryReadingItem(item: ReadingItem, summary: string, wid
   );
 }
 
-// 41-42, 43-45번: 공통 지문 1개 + 하위 문항 N개(각자 endNote/선택지 보유)
+// 41-42, 43-45번: 공통 지문 1개(테두리 박스, PDF 참고 결과) + 하위 문항 N개(각자 endNote/선택지 보유)
 export function renderSharedPassageGroup(items: ReadingItem[], width = READING_STYLE.columnWidth): string {
   if (items.length === 0) throw new Error('renderSharedPassageGroup: items가 비어있습니다.');
   const sorted = [...items].sort((a, b) => a.number - b.number);
-  const passageXml = passageParagraphs(sorted[0].passage, width);
+  const innerWidth = boxInnerWidth(width);
+  const passageXml = wrapInBorderedBox(passageParagraphs(sorted[0].passage, innerWidth), width);
 
   const subQuestionsXml = sorted
     .map((item) => {
