@@ -17,6 +17,13 @@
 - 문항별 출제 기준(유형, 난이도, 지문 길이 등)은 `docs/수능영어_모의고사_출제_프롬프트.md`의 Part1(듣기 1-17)/Part2(독해 18-45) 표가 기준 — Gemini 시스템 프롬프트의 핵심 소스
 - 최종 산출물은 이언어학원 실제 시험지와 동일한 레이아웃/표지/문항 번호 스타일이어야 함
 
+## 작업 완료 기준 (중요) — "작업 완료 = main 병합까지"
+
+- 어떤 Phase/작업이든 **커밋·푸시만으로 끝난 것이 아니다.** 기능 브랜치에 커밋 → PR 생성 → **main으로 병합 완료**까지가 하나의 작업 단위다.
+- PR을 만들었어도 병합 전까지는 다음 Phase로 넘어가지 않는다. (과거 세션이 PR #1 병합 이후에도 별도 브랜치에서 Phase 2~4를 계속 진행하고 main에는 반영하지 않아, 이후 세션이 main만 보고 그 작업 내역을 전혀 모른 채 처음부터 다시 만든 사고가 있었음 — 이 규칙은 그 재발 방지용)
+- 세션을 시작하면 먼저 `git log --oneline --all`, `git branch -a`, `git ls-remote origin`으로 **병합되지 않은 다른 작업 브랜치가 없는지** 확인한다. main이 최신이라고 가정하지 말 것.
+- 병합 후에는 다 쓴 기능 브랜치를 정리(삭제)해 다음 세션이 혼동하지 않게 한다.
+
 ## 기술 스택
 
 | 영역 | 선택 |
@@ -33,8 +40,8 @@
 ## 데이터 모델 (`src/lib/types.ts`)
 
 `ExamSet { metadata, listening: ListeningItem[17], reading: ReadingItem[28] }`
-- `ListeningItem`: number, type, speakers(M/W/Narrator), script(화자별 대사 분리), choices, answer, explanation, imageRef?, pairGroupId?
-- `ReadingItem`: number, type, passage, chartData?, choices(또는 40번 pairChoices), answer, explanation, keyVocab?, pairGroupId?
+- `ListeningItem`: number, type(유형명), instruction(시험지 지시문 전체 문장), speakers(M/W/Narrator), script(화자별 대사 분리), scriptKo(script와 1:1 대응하는 한국어 해석), choices, answer, explanation, imageRef?, pairGroupId?
+- `ReadingItem`: number, type, instruction(시험지 지시문 전체 문장), passage, passageKo, chartData?(25번 도표/27-28번 안내문 — `{caption?, headers, rows}` 표 형태), choices(또는 40번 pairChoices), answer, explanation, keyVocab?, imageRef?, summary?(40번 요약문 완성 전용), pairGroupId?
 
 전체 필드 정의는 설계스펙 문서 3절 참고.
 
@@ -57,10 +64,10 @@
 
 | Phase | 내용 | 상태 |
 |---|---|---|
-| 1 | Gemini 문항 생성 모듈 (JSON 스키마 강제) + BYOK API 키 입력 UI | 진행 중 |
-| 2 | HWPX 템플릿 조각 추출 + 텍스트 치환 PoC (문항 1개) | 예정 |
-| 3 | HWPX 전체 문항 반복 삽입 + 이미지 삽입 (45문항) | 예정 |
-| 4 | Google Cloud TTS 개별 클립 생성 | 예정 |
+| 1 | Gemini 문항 생성 모듈 (JSON 스키마 강제) + BYOK API 키 입력 UI | 완료 |
+| 2 | HWPX 템플릿 조각 추출 + 텍스트 치환 PoC (문항 1개) | 완료 |
+| 3 | HWPX 전체 문항 반복 삽입 + 이미지 삽입 (45문항) | 완료 — 듣기 1-17번 + 독해 18-45번 45문항 전체를 `buildFullExamHwpx()`로 한 hwpx에 조립. 이미지 자체는 placeholder 텍스트로 대체(아래 "알려진 단순화" 참고) |
+| 4 | Google Cloud TTS 개별 클립 생성 | 완료 |
 | 5 | ffmpeg 병합 (신호음/정적구간 포함) | 예정 |
 | 6 | PDF 렌더러 구축 | 예정 |
 | 7 | 프론트엔드 UI 통합 + 진행상태 표시 | 예정 |
@@ -69,11 +76,82 @@
 
 ## 환경변수
 
-앱 자체는 서버 환경변수로 API 키를 보관하지 않는다(BYOK). 아래는 개발용 Node CLI 테스트 스크립트(`scripts/test-gemini.ts`) 전용:
+앱 자체는 서버 환경변수로 API 키를 보관하지 않는다(BYOK). 아래는 개발용 Node CLI 테스트 스크립트 전용:
 
 ```
 GEMINI_API_KEY=                    # scripts/test-gemini.ts 전용 (앱 런타임과 무관)
+GOOGLE_CLOUD_TTS_API_KEY=          # scripts/test-tts.ts 전용 (앱 런타임과 무관)
 ```
+
+## HWPX 템플릿 (Phase 2·3 결과, 설계스펙 6절)
+
+- 실제 이언어학원 템플릿 `고등부.hwpx`를 압축 해제해 `templates/hwpx-template/`에 원본 그대로 보관 (mimetype, Contents/*, BinData/*, Preview/*, META-INF/*, settings.xml)
+- `Contents/section0.xml`이 실제 문항 본문. **듣기 문항의 영어 대본/한국어 해석/정답/해설은 문제 번호 텍스트 뒤에 각주(`hp:endNote`)로 숨겨져 있는 구조** — 화면에는 문제 지시문만 보이고, 각주를 펼치면 대본·해석·정답·해설이 나옴
+- `ListeningItem.scriptKo: string[]`, `ListeningItem.instruction: string` — 각각 한국어 해석, 시험지 지시문 전체 문장. Gemini 프롬프트(`listeningPrompt.ts`)에도 생성 지시 반영 완료
+- ⚠️ **우리 템플릿에는 처음부터 진짜 다단(2단) 설정이 있었음**: `section0.xml` 최상단(첫 문단, `secPr` 직후)에 `<hp:colPr type="NEWSPAPER" colCount="2" sameGap="2268">` 컨트롤이 있어 문서 전체(듣기+독해)가 이미 2단으로 흐르도록 되어 있다 — Phase 2/3 최초 분석 때 "colDef/multiCol/column" 패턴만 검색하고 "colPr"을 놓쳐서 못 찾았던 것. 즉 문항은 좌/우를 직접 나눌 필요 없이 **순서대로 이어붙이기만 하면 HWP가 자동으로 컬럼에 배분**한다.
+
+### 독해(18-45) 실제 템플릿 확보 — 신규 레이아웃을 실측값으로 보정
+
+처음엔 독해 구간이 없는 `고등부.hwpx`만 있어 레이아웃을 새로 설계했으나(설계 배경은 아래 "신규 레이아웃 설계 배경" 참고), 이후 사용자가 **① 실제 수능 영어영역 문제지 PDF**, **② 45문항 전체가 채워진 실제 hwpx 참고 파일**을 제공해 형식만 참고해 아래처럼 대폭 보정했다(지문·문항 텍스트는 어디서도 사용하지 않음):
+
+- **표/박스를 쓰지 않는다** — hwpx 참고자료 확인 결과 25번(도표)·27-28번(안내문)은 표가 아니라 **BinData에 저장된 실제 이미지**로 삽입되어 있었고, 41-42/43-45번 공유 지문도 테두리 박스 없이 **일반 문단**이었다. 이전 버전에서 만들었던 `wrapInTwoColumnTable`(표 기반 2단), `wrapInBorderedBox`(테두리 박스), `buildDataTableXml`(도표/안내문 표), `renderChartReadingItem`/`renderNoticeReadingItem`(표+박스 렌더러)를 전부 제거했다.
+- **2단 편집은 표가 아니라 위에서 설명한 기존 `hp:colPr`을 그대로 활용** — 문항 조각을 순서대로 이어붙이기만 하면 됨. `distributeIntoColumns`(좌/우 수동 배분)도 불필요해져 제거.
+- **정답/해설/해석(한국어 지문 해석)은 듣기와 동일하게 각주(`hp:endNote`)로 숨겨 "미주 답지" 형태로 구현** — 참고 hwpx 자체는 독해에 각주를 쓰지 않았지만, 사용자가 명시적으로 요청해 반영(문항 본문은 절대 각주 안에 넣지 않음).
+- `ReadingItem.passageKo: string` 필드 추가(지문 전체 한국어 해석, `scriptKo`와 동일한 이유로 필요해 추가) — Gemini 프롬프트(`readingPrompt.ts`)에도 생성 지시 반영
+- `readingStyleConfig.ts`의 컬럼 폭/간격을 실제 hwpx 참고자료에서 실측한 값(`columnGap=2268`은 `hp:colPr`의 `sameGap` 실측값, `columnWidth=24376`은 문서 내 실제 lineseg 실측값)으로 교체 — PDF 비율 기반 추정치보다 훨씬 정확함
+
+**구현 완료**: `src/lib/hwpx/readingSection.ts`
+- `renderStandardReadingItem` — 18-39 등 표준형(지문+선택지), 25/27/28도 `imageRef` 설정 시 자동으로 placeholder 이미지가 들어가므로 이 함수 하나로 처리(표/박스 없음, 정답/해설/해석/핵심어휘는 각주에 숨김)
+- `renderSummaryReadingItem` — 40번(요약문 2빈칸): `pairChoices`를 5개 조합 선택지로 렌더링. 요약문 자체는 `ReadingItem.summary` 필드(Phase 3 완료 작업에서 추가, 아래 참고)에서 가져옴
+- `renderSharedPassageGroup` — 41-42/43-45(장문 공유 지문): 지문은 일반 문단으로 한 번만 넣고 하위 문항 여러 개를 이어붙임(박스 없음)
+- `buildReadingSectionXml(reading: ReadingItem[])` — **Phase 3 마무리 작업에서 추가.** 18~45번 28문항을 번호 순서대로 순회하며 위 세 렌더러에 분배해 하나의 XML로 조립(18-39 표준형 → 40 요약문 → 41-42 공유지문 → 43-45 공유지문)
+- `imagePlaceholderParagraph` — 이미지가 필요한 문항(`imageRef` 설정 시) `[이미지 자리표시 — ...]` 안내 텍스트 문단으로 표시(실제 이미지 생성 파이프라인은 미도입). 처음엔 BinData의 기존 이미지(`image1.jpg`)를 `hp:pic`으로 재사용했으나, 그 이미지가 실제로는 이언어학원 뒷표지 배경 그림이라 엉뚱하게 작게 삽입되는 버그가 있어(아래 "실사용 중 발견된 버그" 참고) 텍스트 방식으로 교체함
+- `buildHwpx.ts`의 `buildReadingSectionPoCHwpx(readingSectionXml)` — 원본 문서(표지+듣기 1-17번)는 그대로 두고 문서 맨 끝(정답 라벨 앞)에 독해 문항을 순서대로 이어붙임(좌/우 배분 로직 없음). 문항 개수와 무관하게 동작하므로 3문항 PoC든 28문항 전체든 그대로 재사용
+- `buildHwpx.ts`의 `buildFullExamHwpx(listening, reading)` — **Phase 3 완료 작업에서 추가.** 듣기 1-17번 교체 + 독해 18-45번 삽입을 한 번에 처리해 45문항 전체가 채워진 hwpx 하나를 생성하는 최종 진입점
+- `scripts/hwpx-reading-poc.ts` (`npm run hwpx:reading-poc -- <경로>`) — 18번+25번+27번 3문항 소규모 검증용, 유지
+- `scripts/hwpx-full-exam-poc.ts` (`npm run hwpx:full-exam-poc -- <경로>`) — **Phase 3 완료 검증용.** 듣기 17문항 + 독해 28문항(40번 pairChoices, 41-42/43-45 공유지문 포함) 테스트 데이터로 45문항 전체 hwpx를 생성. mimetype STORED+첫 엔트리, XML well-formed, 각주(`hp:endNote`) 번호 1~45 전부 유일하게 존재, "정답" 라벨이 모든 문항 뒤에 위치, 원본 템플릿 문구 유출 없음, 문단별 lineseg 개수가 텍스트 길이에 비례(1개 고정 아님)를 확인 완료
+
+### 실사용 중 발견된 버그와 수정 (한글에서 실제로 열어본 뒤 발견)
+
+독해 데모 파일을 한글에서 직접 열어본 사용자 피드백으로 아래 3가지 문제를 발견·수정함:
+
+1. **문단 줄바꿈 겹침 버그**: 문단마다 `<hp:lineseg>`를 정확히 1개만 넣었더니, 실제로 여러 줄로 줄바꿈되는 독해 지문·긴 해설 등에서 한글이 몇 줄로 나뉘는지 몰라 모든 줄이 같은 위치에 겹쳐 그려졌다(선택지처럼 원래 한 줄짜리 짧은 텍스트로만 테스트했을 때는 우연히 문제가 드러나지 않았음). `textUtils.ts`에 `buildLinesegArrayForText`/`buildSimpleParagraphXml`을 추가해, 컬럼 폭 기준 한글/영어 평균 글자 수로 줄바꿈 지점을 근사 계산하고 그 줄 수만큼 `lineseg` 항목을 생성하도록 수정(정확한 폰트 기반 줄바꿈은 아니지만 겹침은 방지됨). `readingSection.ts`(`simpleParagraph`, `stemParagraph`)와 `listeningSection.ts`(전체, 아래 참고) 양쪽 모두 적용.
+2. **잘못된 이미지 placeholder**: 25/27번 이미지 자리에 재사용했던 BinData `image1.jpg`가 실제로는 이언어학원 뒷표지 배경 그림이라 시험지 본문에 엉뚱하게 작은 워터마크처럼 삽입되었다. `<hp:pic>` 참조를 완전히 제거하고 `[이미지 자리표시 — ...]` 텍스트로 대체.
+3. **삽입 위치 오류**: 새 독해 섹션을 `</hs:sec>` 바로 앞에 삽입했더니 문서 맨 끝의 "정답" 라벨 문단보다 뒤에 붙어, 렌더링 결과에서 "정답" 글자가 18번 문항 바로 앞에 나타나는 것처럼 보였다. `buildHwpx.ts`의 `buildReadingSectionPoCHwpx`를 "정답" 라벨 문단을 찾아 그 앞에 삽입하도록 수정(`TAIL_LABEL_MARKER`).
+
+이 중 1번(줄바꿈 겹침)은 독해 지문처럼 원래도 여러 줄인 텍스트에서만 드러나는 버그라, 사용자가 아직 테스트하지 않은 듣기 섹션(`listeningSection.ts`)에도 동일하게 잠재해 있었다. 사용자 리포트 전에 선제적으로 발견해 아래처럼 같이 수정함.
+
+### 신규 레이아웃 설계 배경 (독해 템플릿 확보 전 1차 시도, 현재는 위 내용으로 대체됨)
+
+업로드된 `고등부.hwpx`에는 처음엔 **듣기 1-17번만 있고 독해 18-45번 구간이 아예 없었다** (`section0.xml`을 전수 분석해 확인 — 총 top-level 문단 167개가 모두 표지+듣기17문항+"정답" 라벨로 끝남). 실제 이언어학원 독해 템플릿을 구하기 전까지, 사용자가 제공한 실제 수능 영어영역 문제지 PDF(2026학년도, A3 842×1191pt)의 여백/컬럼 비율만 추출해 1차로 레이아웃을 만들었으나, 그 과정에서 표 기반 2단·테두리 박스 등을 임의로 설계했던 부분은 이후 실제 hwpx 참고자료로 전부 재검증/수정되었다(위 절 참고).
+
+### Phase 3 완료 범위: 듣기 1-17번 전체 조립
+
+- `src/lib/hwpx/` (Node 전용, `tsconfig.app.json`에서 제외돼 브라우저 번들에는 포함 안 됨):
+  - `paths.ts`, `textUtils.ts` — 경로 상수, XML 이스케이프/원문자 변환, 줄바꿈 lineseg 계산(`buildLinesegArrayForText`/`buildSimpleParagraphXml`)
+  - `listeningFragment.ts` — Phase 2 PoC(1번 문항 단일 치환, `listening-single-line.template.xml` 사용)용, 유지
+  - `listeningSection.ts` — **Phase 3 핵심**. `buildListeningSectionXml(listening: ListeningItem[])`이 17문항 전체를 조립. ⚠️ 처음엔 `templates/hwpx-template/fragments/`의 정적 템플릿 3종(`listening-line`/`listening-item`/`listening-1617-pair`.template.xml)에 텍스트만 치환하는 방식이었으나, (a) 각 템플릿이 고정 개수의 `lineseg`만 가지고 있어 독해 섹션과 동일한 줄바꿈 겹침 버그가 잠재해 있었고 (b) `listening-1617-pair.template.xml`의 "▪선택지해석:" 블록에 실제 참고 원본 시험지의 진짜 내용(예: "① 전통적 농업과 도시 농업의 비교")이 파라미터화되지 않은 채 하드코딩되어 있어 생성물마다 그대로 노출되는 문제가 있었다. 두 문제를 근본적으로 없애기 위해 독해 섹션(`readingSection.ts`)과 동일한 방식(텍스트 길이에 맞춰 그때그때 XML을 동적으로 생성)으로 전면 재작성했고, 정적 템플릿 3개 파일은 삭제함("▪선택지해석" 블록은 파라미터화하지 않고 통째로 제거 — `Choice` 타입에 선택지 번역 필드가 없어 애초에 생성할 수도 없었음).
+  - `buildHwpx.ts` — `buildListeningPoCHwpx`(Phase 2, 문항 1개) + `buildListeningExamHwpx`(Phase 3, 듣기 섹션 전체 교체, `jszip` 재압축·mimetype STORE 유지)
+- `scripts/hwpx-poc.ts` (`npm run hwpx:poc -- <경로>`, 문항 1개), `scripts/hwpx-listening-poc.ts` (`npm run hwpx:listening-poc -- <경로>`, 17문항 전체) — 둘 다 원본과 뚜렷이 구분되는 테스트 데이터로 검증됨(mimetype STORED, XML 유효성, 신규/원본 내용 대조, 표지·문서 끝부분 보존 확인)
+
+### 알려진 단순화(추후 보강 필요)
+
+- **4번(그림 불일치)**: 원본은 그림 위에 ①~⑤ 위치 라벨이 찍힌 이미지 문제. 지금은 표준 텍스트 5지선다로 대체(`imageRef`는 정보용 문자열일 뿐 실제 이미지 삽입 없음) — 실제 그림 생성/삽입 파이프라인 필요
+- **10번(표 문제)**: 원본은 비교표(호텔 등) 삽입. 지금은 표준 텍스트 5지선다로 대체 — 구조화된 표 데이터 필드와 표 렌더링 로직 필요
+- **11-17번 "▪선택지해석"(영어 선택지의 한국어 번역) 블록**: 원본엔 있지만 `Choice` 타입에 선택지 번역 필드가 없어 생성물에서는 완전히 생략됨(위 "실사용 중 발견된 버그" 참고 — 한때 정적 템플릿에 원본 내용이 하드코딩된 채 남아있던 것을 발견해 제거함)
+- **독해 25/27/28번 이미지 placeholder**: 실제로는 표가 아니라 이미지이지만 이미지 생성 파이프라인이 없어 안내 텍스트로 대체(위 "실사용 중 발견된 버그" 참고)
+- **41-42/43-45 공유 지문의 한국어 해석 중복**: `renderSharedPassageGroup`은 영어 지문은 한 번만 넣지만, 각 하위 문항이 자기 `passageKo`를 각자의 각주에 넣다 보니 공유 지문의 한국어 해석이 하위 문항 수만큼(41-42는 2번, 43-45는 3번) 반복 삽입된다. 틀린 내용은 아니지만 불필요한 중복 — 그룹당 한 번만 넣도록 개선 검토 필요
+
+## TTS 모듈 (Phase 4 결과, 설계스펙 5절)
+
+- `netlify.toml` 신규 생성 (functions 디렉터리 = `netlify/functions`, SPA fallback redirect)
+- `src/lib/tts/`:
+  - `voices.ts` — 화자(M/W/Narrator)별 Chirp3-HD 보이스 고정 매핑(⚠️ 설계스펙에 예시로 제시된 보이스명이므로 실사용 전 Google Cloud 콘솔에서 최신 목록 확인 필요), 기본 속도 배율(`DEFAULT_SPEAKING_RATE`)
+  - `googleTts.ts` — Google Cloud TTS REST API(`texttospeech.googleapis.com/v1/text:synthesize`) 호출. **Chirp3-HD 보이스는 SSML `<prosody>` 태그를 지원하지 않아** 설계스펙의 SSML 방식 대신 `audioConfig.speakingRate`(합성 API 전역 파라미터)로 속도를 조절하도록 구현(기술적 판단 변경, 결과는 동일)
+  - `types.ts` — `TtsLineRequest`/`TtsLineResult` (호출자가 id로 결과를 재매칭)
+  - 에러 메시지에 API 키가 절대 노출되지 않도록 처리(URL의 `?key=` 대신 상태코드/메시지만 노출)
+- `netlify/functions/generate-audio.ts` — BYOK 원칙대로 사용자의 TTS 키를 요청 body로만 받아 그 호출 처리 중에만 사용(저장 안 함), `src/lib/tts/googleTts.ts`의 `synthesizeLines`를 그대로 재사용
+- `scripts/test-tts.ts` (`npm run test:tts -- <출력폴더>`) — 화자 3종 샘플 문장을 실제로 합성해 mp3로 저장하는 개발자용 CLI. 이 세션 환경에서는 실제 TTS 키가 없어 최종 오디오 청취 검증은 못했음(Node `fetch`로 Google TTS 엔드포인트까지 도달하는 것은 확인) — 사용자가 실제 `GOOGLE_CLOUD_TTS_API_KEY`로 직접 실행해 음질/속도 확인 필요
 
 ## 폴더 구조 (목표)
 
@@ -84,11 +162,17 @@ src/
 │   ├── apiKeyStorage.ts  # localStorage 기반 Gemini/TTS 키 read/write
 │   ├── gemini.ts       # Gemini 호출(사용자 apiKey 인자) + JSON 파싱/검증
 │   ├── prompts/        # listeningPrompt.ts, readingPrompt.ts
-│   └── types.ts        # ExamSet 등 타입 정의
+│   ├── types.ts        # ExamSet 등 타입 정의
+│   ├── hwpx/           # (Node 전용, 브라우저 번들 제외) HWPX 조립 — paths/textUtils/listeningFragment/listeningSection/readingSection/readingStyleConfig/buildHwpx
+│   └── tts/            # (Node 전용) Google Cloud TTS 호출 — voices/googleTts/types
 ├── App.tsx / main.tsx
-netlify/functions/      # generate-audio, merge-audio-background, export-hwpx, export-pdf (TTS 키는 요청 시점 일회성 전달)
-templates/              # hwpx-template(고등부.hwpx 압축 해제본), pdf-template
+scripts/                # test-gemini.ts, hwpx-poc.ts, hwpx-listening-poc.ts, hwpx-reading-poc.ts, hwpx-full-exam-poc.ts, test-tts.ts (개발용 Node CLI 테스트)
+netlify/functions/      # generate-audio(완료), merge-audio-background, export-hwpx, export-pdf 예정 (TTS 키는 요청 시점 일회성 전달)
+templates/
+├── hwpx-template/      # 고등부.hwpx 압축 해제본 원본 + fragments/(파라미터화된 문항 조각 템플릿)
+└── pdf-template/       # 예정 (Phase 6)
 docs/                   # 원본 설계 문서 2건 보관
+netlify.toml            # functions 디렉터리 + SPA fallback redirect
 ```
 
 ## 배포 시 유의사항

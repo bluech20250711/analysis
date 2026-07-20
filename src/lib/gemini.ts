@@ -28,6 +28,7 @@ const listeningItemSchema: Schema = {
   properties: {
     number: { type: Type.INTEGER },
     type: { type: Type.STRING },
+    instruction: { type: Type.STRING },
     speakers: { type: Type.ARRAY, items: { type: Type.STRING, enum: ['M', 'W', 'Narrator'] } },
     script: {
       type: Type.ARRAY,
@@ -40,13 +41,34 @@ const listeningItemSchema: Schema = {
         required: ['speaker', 'line'],
       },
     },
+    scriptKo: { type: Type.ARRAY, items: { type: Type.STRING } },
     choices: { type: Type.ARRAY, items: choiceSchema },
     answer: { type: Type.INTEGER },
     explanation: { type: Type.STRING },
     imageRef: { type: Type.STRING, nullable: true },
     pairGroupId: { type: Type.STRING, nullable: true },
   },
-  required: ['number', 'type', 'speakers', 'script', 'choices', 'answer', 'explanation'],
+  required: [
+    'number',
+    'type',
+    'instruction',
+    'speakers',
+    'script',
+    'scriptKo',
+    'choices',
+    'answer',
+    'explanation',
+  ],
+};
+
+const readingTableSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    caption: { type: Type.STRING, nullable: true },
+    headers: { type: Type.ARRAY, items: { type: Type.STRING } },
+    rows: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.STRING } } },
+  },
+  required: ['headers', 'rows'],
 };
 
 const readingItemSchema: Schema = {
@@ -54,8 +76,10 @@ const readingItemSchema: Schema = {
   properties: {
     number: { type: Type.INTEGER },
     type: { type: Type.STRING },
+    instruction: { type: Type.STRING },
     passage: { type: Type.STRING },
-    chartData: { type: Type.OBJECT, nullable: true, properties: {} },
+    passageKo: { type: Type.STRING },
+    chartData: { ...readingTableSchema, nullable: true },
     choices: { type: Type.ARRAY, items: choiceSchema, nullable: true },
     pairChoices: {
       type: Type.ARRAY,
@@ -73,9 +97,11 @@ const readingItemSchema: Schema = {
         required: ['word', 'meaning'],
       },
     },
+    imageRef: { type: Type.STRING, nullable: true },
+    summary: { type: Type.STRING, nullable: true },
     pairGroupId: { type: Type.STRING, nullable: true },
   },
-  required: ['number', 'type', 'passage', 'answer', 'explanation'],
+  required: ['number', 'type', 'instruction', 'passage', 'passageKo', 'answer', 'explanation'],
 };
 
 const listeningResponseSchema: Schema = {
@@ -96,28 +122,44 @@ const readingResponseSchema: Schema = {
 
 const choiceZod = z.object({ number: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]), text: z.string() });
 
-const listeningItemZod = z.object({
-  number: z.number(),
-  type: z.string(),
-  speakers: z.array(z.enum(['M', 'W', 'Narrator'])),
-  script: z.array(z.object({ speaker: z.enum(['M', 'W', 'Narrator']), line: z.string() })),
-  choices: z.array(choiceZod),
-  answer: z.number(),
-  explanation: z.string(),
-  imageRef: z.string().nullable().optional(),
-  pairGroupId: z.string().nullable().optional(),
+const listeningItemZod = z
+  .object({
+    number: z.number(),
+    type: z.string(),
+    instruction: z.string(),
+    speakers: z.array(z.enum(['M', 'W', 'Narrator'])),
+    script: z.array(z.object({ speaker: z.enum(['M', 'W', 'Narrator']), line: z.string() })),
+    scriptKo: z.array(z.string()),
+    choices: z.array(choiceZod),
+    answer: z.number(),
+    explanation: z.string(),
+    imageRef: z.string().nullable().optional(),
+    pairGroupId: z.string().nullable().optional(),
+  })
+  .refine((item) => item.script.length === item.scriptKo.length, {
+    message: 'scriptKo 배열의 길이가 script 배열과 일치해야 합니다.',
+  });
+
+const readingTableZod = z.object({
+  caption: z.string().nullable().optional(),
+  headers: z.array(z.string()),
+  rows: z.array(z.array(z.string())),
 });
 
 const readingItemRawZod = z.object({
   number: z.number(),
   type: z.string(),
+  instruction: z.string(),
   passage: z.string(),
-  chartData: z.record(z.string(), z.unknown()).nullable().optional(),
+  passageKo: z.string(),
+  chartData: readingTableZod.nullable().optional(),
   choices: z.array(choiceZod).nullable().optional(),
   pairChoices: z.tuple([z.array(choiceZod), z.array(choiceZod)]).nullable().optional(),
   answer: z.union([z.number(), z.string()]),
   explanation: z.string(),
   keyVocab: z.array(z.object({ word: z.string(), meaning: z.string() })).nullable().optional(),
+  imageRef: z.string().nullable().optional(),
+  summary: z.string().nullable().optional(),
   pairGroupId: z.string().nullable().optional(),
 });
 
@@ -164,12 +206,18 @@ function normalizeReadingItem(raw: z.infer<typeof readingItemRawZod>): ReadingIt
   return {
     number: raw.number,
     type: raw.type,
+    instruction: raw.instruction,
     passage: raw.passage,
-    chartData: raw.chartData ?? undefined,
+    passageKo: raw.passageKo,
+    chartData: raw.chartData
+      ? { ...raw.chartData, caption: raw.chartData.caption ?? undefined }
+      : undefined,
     choices,
     answer: raw.answer,
     explanation: raw.explanation,
     keyVocab: raw.keyVocab ?? undefined,
+    imageRef: raw.imageRef ?? undefined,
+    summary: raw.summary ?? undefined,
     pairGroupId: raw.pairGroupId ?? undefined,
   };
 }
