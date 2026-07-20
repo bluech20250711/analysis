@@ -46,6 +46,8 @@ function App() {
   const [pdfBlob, setPdfBlob] = useState<Blob | undefined>();
   const [audioBlob, setAudioBlob] = useState<Blob | undefined>();
   const [audioSkippedReason, setAudioSkippedReason] = useState<string | undefined>();
+  const [hwpxFailedReason, setHwpxFailedReason] = useState<string | undefined>();
+  const [pdfFailedReason, setPdfFailedReason] = useState<string | undefined>();
 
   const loading = stage !== null && stage !== 'done';
   const ttsApiKey = getTtsApiKey();
@@ -65,6 +67,8 @@ function App() {
     setPdfBlob(undefined);
     setAudioBlob(undefined);
     setAudioSkippedReason(undefined);
+    setHwpxFailedReason(undefined);
+    setPdfFailedReason(undefined);
     setStage('listening');
 
     try {
@@ -87,12 +91,20 @@ function App() {
       }
 
       setStage('hwpx');
-      const hwpx = await requestHwpx(generated.listening, generated.reading);
-      setHwpxBlob(hwpx);
+      try {
+        const hwpx = await requestHwpx(generated.listening, generated.reading);
+        setHwpxBlob(hwpx);
+      } catch (hwpxErr) {
+        setHwpxFailedReason(hwpxErr instanceof Error ? hwpxErr.message : String(hwpxErr));
+      }
 
       setStage('pdf');
-      const pdf = await requestPdf(generated);
-      setPdfBlob(pdf);
+      try {
+        const pdf = await requestPdf(generated);
+        setPdfBlob(pdf);
+      } catch (pdfErr) {
+        setPdfFailedReason(pdfErr instanceof Error ? pdfErr.message : String(pdfErr));
+      }
 
       setStage('done');
     } catch (err) {
@@ -164,6 +176,8 @@ function App() {
                 pdfBlob={pdfBlob}
                 audioBlob={audioBlob}
                 audioSkippedReason={audioSkippedReason}
+                hwpxFailedReason={hwpxFailedReason}
+                pdfFailedReason={pdfFailedReason}
               />
             )}
           </div>

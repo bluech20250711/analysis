@@ -6,6 +6,8 @@ interface DownloadPanelProps {
   pdfBlob?: Blob;
   audioBlob?: Blob;
   audioSkippedReason?: string;
+  hwpxFailedReason?: string;
+  pdfFailedReason?: string;
 }
 
 function downloadBlob(blob: Blob, filename: string): void {
@@ -17,7 +19,15 @@ function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-function DownloadPanel({ examSet, hwpxBlob, pdfBlob, audioBlob, audioSkippedReason }: DownloadPanelProps) {
+function DownloadPanel({
+  examSet,
+  hwpxBlob,
+  pdfBlob,
+  audioBlob,
+  audioSkippedReason,
+  hwpxFailedReason,
+  pdfFailedReason,
+}: DownloadPanelProps) {
   const handleDownloadJson = () => {
     const blob = new Blob([JSON.stringify(examSet, null, 2)], { type: 'application/json' });
     downloadBlob(blob, 'exam-set.json');
@@ -65,6 +75,10 @@ function DownloadPanel({ examSet, hwpxBlob, pdfBlob, audioBlob, audioSkippedReas
       </div>
 
       {!audioBlob && audioSkippedReason && <p className="text-sm text-gray-500">{audioSkippedReason}</p>}
+      {!hwpxBlob && hwpxFailedReason && (
+        <p className="text-sm text-red-600">HWPX 생성 실패: {hwpxFailedReason}</p>
+      )}
+      {!pdfBlob && pdfFailedReason && <p className="text-sm text-red-600">PDF 생성 실패: {pdfFailedReason}</p>}
     </div>
   );
 }
