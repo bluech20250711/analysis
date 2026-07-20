@@ -3,6 +3,17 @@
   publish = "dist"
   functions = "netlify/functions"
 
+# Netlify Functions 번들러는 기본적으로 정적 import된 JS/TS만 패키징하고
+# templates/ 아래의 XML/폰트 같은 비-코드 자산은 자동으로 포함하지 않는다.
+# export-hwpx는 templates/hwpx-template/(section0.xml 등), export-pdf는
+# templates/pdf-template/(한글 서브셋 폰트)를 런타임에 fs로 직접 읽으므로
+# 각 함수 배포 패키지에 명시적으로 포함시켜야 한다. (ENOENT: stat '/var/task/templates/...' 방지)
+[functions."export-hwpx"]
+  included_files = ["templates/hwpx-template/**"]
+
+[functions."export-pdf"]
+  included_files = ["templates/pdf-template/**"]
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

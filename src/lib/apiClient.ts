@@ -6,13 +6,31 @@ import type { ExamSet, ListeningItem, ReadingItem } from './types';
 // Gemini 호출과 달리 이 함수들은 서버 리소스(ffmpeg, jszip, fontkit)가 필요한 작업이라
 // 서버리스 함수를 거친다(설계스펙 9절 BYOK — TTS 키는 요청 본문으로만 일회성 전달, 저장 안 함).
 
+// 함수가 우리 코드에서 정상적으로 JSON 에러 응답을 반환한 경우뿐 아니라, Netlify 자체가
+// (실행시간 초과·크래시 등으로) HTML/텍스트 에러 페이지를 대신 반환하는 경우에도 화면에
+// "OO 생성에 실패했습니다."라는 말만 보이고 실제 원인이 사라지지 않도록, 상태 코드와
+// 응답 본문 일부를 최대한 그대로 붙여서 보여준다.
 async function readErrorMessage(response: Response, fallback: string): Promise<string> {
+  const statusInfo = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
+
+  let bodyText: string;
   try {
-    const body = (await response.json()) as { error?: string };
-    return typeof body.error === 'string' ? body.error : fallback;
+    bodyText = await response.text();
   } catch {
-    return fallback;
+    return `${fallback} (${statusInfo})`;
   }
+
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: string };
+    if (typeof parsed.error === 'string' && parsed.error.trim()) {
+      return `${parsed.error} (${statusInfo})`;
+    }
+  } catch {
+    // JSON이 아닌 응답(Netlify 자체 에러 페이지 등) — 아래에서 원문 일부를 그대로 보여준다.
+  }
+
+  const snippet = bodyText.trim().slice(0, 300);
+  return snippet ? `${fallback} (${statusInfo}): ${snippet}` : `${fallback} (${statusInfo})`;
 }
 
 export async function requestAudioClips(ttsApiKey: string, lines: TtsLineRequest[]): Promise<TtsLineResult[]> {

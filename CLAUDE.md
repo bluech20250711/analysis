@@ -272,3 +272,5 @@ netlify.toml            # functions 디렉터리 + SPA fallback redirect
 - SSR 불필요 — 순수 SPA + Netlify Functions 구조 유지
 - ffmpeg 바이너리는 서버리스 함수 배포 용량 제한(보통 50MB) 고려, 초과 시 별도 서비스 분리 검토
 - HWPX 출력 파일명은 ASCII만 사용(한글 파일명 다운로드 시 깨짐 이력 있음), 표시명만 한글
+- ⚠️ **`templates/` 자산은 `netlify.toml`의 `[functions."함수명"].included_files`로 명시해야 함** — Netlify Functions 번들러는 정적 import된 JS/TS만 자동 포함하고 `templates/hwpx-template/`(XML)·`templates/pdf-template/`(폰트) 같은 비-코드 자산은 포함하지 않는다. 실제 배포에서 `export-hwpx`가 `ENOENT: stat '/var/task/templates/hwpx-template/Contents/section0.xml'`로 실패해 발견·수정함(`export-pdf`도 동일 구조라 선제적으로 함께 반영). 새로 추가하는 함수가 `templates/` 아래 파일을 `fs`로 직접 읽는다면 이 설정도 함께 추가해야 함
+- 서버리스 함수 호출 실패 시 `src/lib/apiClient.ts`가 HTTP 상태 코드 + 응답 본문 일부를 에러 메시지에 그대로 포함하도록 되어 있음(Netlify 자체 에러 페이지 등 JSON이 아닌 응답도 원인 파악 가능하도록) — 그래도 원인이 불명확하면 Netlify 대시보드 → 해당 사이트 → **Functions** 탭 → 함수 이름 클릭 → **Logs**에서 실제 실행 로그 확인(또는 Deploys → 특정 배포 → Functions 로그)
