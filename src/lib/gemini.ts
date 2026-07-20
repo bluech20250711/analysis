@@ -3,8 +3,8 @@ import { z } from 'zod';
 import type { ExamOptions, ExamSet, ListeningItem, ReadingItem } from './types';
 import { buildListeningSystemPrompt } from './prompts/listeningPrompt';
 import { buildReadingSystemPrompt, type ReadingRange } from './prompts/readingPrompt';
+import { GEMINI_MODEL } from './geminiConfig';
 
-const MODEL = 'gemini-2.5-pro';
 const MAX_ATTEMPTS = 3; // 최초 시도 + 최대 2회 재시도
 
 function getClient(apiKey: string): GoogleGenAI {
@@ -175,7 +175,7 @@ async function callGeminiJson<T>(
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const response = await client.models.generateContent({
-        model: MODEL,
+        model: GEMINI_MODEL,
         contents: userPrompt,
         config: {
           systemInstruction,

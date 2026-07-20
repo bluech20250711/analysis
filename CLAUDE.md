@@ -29,7 +29,7 @@
 | 영역 | 선택 |
 |---|---|
 | 프론트엔드 | React + Vite + TypeScript + Tailwind |
-| 문항 생성 AI | Gemini API (`gemini-2.5-pro` 또는 flash 계열) |
+| 문항 생성 AI | Gemini API — 모델명은 `src/lib/geminiConfig.ts`의 `GEMINI_MODEL` 한 곳에서만 관리(현재 `gemini-3.1-pro-preview`, 2026-07-20 `gemini-2.5-pro` 종료로 교체) |
 | TTS | Google Cloud Text-to-Speech (Chirp3-HD / Neural2) |
 | 서버리스 백엔드 | Netlify Functions (Node.js) — HWPX/PDF/오디오 병합 (API 키는 보관하지 않음, BYOK 참고) |
 | HWPX 생성 | Node.js + `jszip` (XML 템플릿 주입), mimetype은 반드시 STORED |
