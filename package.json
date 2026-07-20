@@ -12,7 +12,8 @@
     "hwpx:poc": "tsx scripts/hwpx-poc.ts",
     "hwpx:listening-poc": "tsx scripts/hwpx-listening-poc.ts",
     "test:tts": "tsx scripts/test-tts.ts",
-    "hwpx:reading-poc": "tsx scripts/hwpx-reading-poc.ts"
+    "hwpx:reading-poc": "tsx scripts/hwpx-reading-poc.ts",
+    "hwpx:full-exam-poc": "tsx scripts/hwpx-full-exam-poc.ts"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",

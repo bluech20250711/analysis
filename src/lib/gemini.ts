@@ -98,6 +98,7 @@ const readingItemSchema: Schema = {
       },
     },
     imageRef: { type: Type.STRING, nullable: true },
+    summary: { type: Type.STRING, nullable: true },
     pairGroupId: { type: Type.STRING, nullable: true },
   },
   required: ['number', 'type', 'instruction', 'passage', 'passageKo', 'answer', 'explanation'],
@@ -158,6 +159,7 @@ const readingItemRawZod = z.object({
   explanation: z.string(),
   keyVocab: z.array(z.object({ word: z.string(), meaning: z.string() })).nullable().optional(),
   imageRef: z.string().nullable().optional(),
+  summary: z.string().nullable().optional(),
   pairGroupId: z.string().nullable().optional(),
 });
 
@@ -215,6 +217,7 @@ function normalizeReadingItem(raw: z.infer<typeof readingItemRawZod>): ReadingIt
     explanation: raw.explanation,
     keyVocab: raw.keyVocab ?? undefined,
     imageRef: raw.imageRef ?? undefined,
+    summary: raw.summary ?? undefined,
     pairGroupId: raw.pairGroupId ?? undefined,
   };
 }

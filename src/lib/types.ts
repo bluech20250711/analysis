@@ -41,6 +41,7 @@ export interface ReadingItem {
   explanation: string;
   keyVocab?: { word: string; meaning: string }[];
   imageRef?: string; // 이미지가 필요한 문항의 설명 문자열 (실제 이미지는 placeholder로 대체, ListeningItem과 동일 패턴). 25/27/28번은 항상 설정
+  summary?: string; // 40번(요약문 완성) 전용 — (A)/(B) 빈칸이 표시된 요약문 자체. 40번만 설정
   pairGroupId?: string; // 41-42, 43-45 장문 묶음 식별자
 }
 

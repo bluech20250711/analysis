@@ -1,10 +1,11 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import JSZip from 'jszip';
-import type { ListeningItem } from '../types';
+import type { ListeningItem, ReadingItem } from '../types';
 import { HWPX_TEMPLATE_DIR, SECTION0_PATH } from './paths';
 import { renderListeningItemFragment, type ListeningFragmentData } from './listeningFragment';
 import { buildListeningSectionXml } from './listeningSection';
+import { buildReadingSectionXml } from './readingSection';
 
 // 원본 고등부.hwpx의 1번 문항 조각 경계를 찾기 위한 마커.
 // (실제 텍스트를 앵커로 삼아 위치를 찾는다 — Phase 3에서 여러 문항을 다룰 때는
@@ -132,6 +133,35 @@ export async function buildReadingSectionPoCHwpx(readingSectionXml: string): Pro
 
   const newSection0 =
     originalSection0.slice(0, insertAt) + readingSectionXml + originalSection0.slice(insertAt);
+
+  const zip = new JSZip();
+  await addTemplateFilesToZip(zip);
+  zip.file('Contents/section0.xml', newSection0);
+
+  return zip.generateAsync({ type: 'nodebuffer', platform: 'UNIX' });
+}
+
+function insertReadingSectionBeforeTailLabel(section0: string, readingSectionXml: string): string {
+  const tailLabelIdx = section0.lastIndexOf(TAIL_LABEL_MARKER);
+  if (tailLabelIdx === -1) throw new Error('section0.xml에서 "정답" 라벨 문단을 찾을 수 없습니다.');
+  const insertAt = section0.lastIndexOf('<hp:p ', tailLabelIdx);
+  if (insertAt === -1) throw new Error('"정답" 라벨의 시작 <hp:p> 태그를 찾을 수 없습니다.');
+
+  return section0.slice(0, insertAt) + readingSectionXml + section0.slice(insertAt);
+}
+
+// Phase 3 완료: 듣기 1-17번 + 독해 18-45번 45문항 전체를 하나의 hwpx로 조립한다.
+// 듣기 섹션은 원본 1-17번 위치를 그대로 교체하고, 독해 섹션은 문서 끝 "정답" 라벨 앞에 삽입한다.
+export async function buildFullExamHwpx(listening: ListeningItem[], reading: ReadingItem[]): Promise<Buffer> {
+  await stat(SECTION0_PATH);
+  const originalSection0 = await readFile(SECTION0_PATH, 'utf-8');
+
+  const { start, end } = findListeningSectionBounds(originalSection0);
+  const newListeningXml = await buildListeningSectionXml(listening);
+  const withListening = originalSection0.slice(0, start) + newListeningXml + originalSection0.slice(end);
+
+  const readingSectionXml = buildReadingSectionXml(reading);
+  const newSection0 = insertReadingSectionBeforeTailLabel(withListening, readingSectionXml);
 
   const zip = new JSZip();
   await addTemplateFilesToZip(zip);
