@@ -1,9 +1,19 @@
+import { existsSync } from 'node:fs';
 import type { Handler } from '@netlify/functions';
 import { buildFullExamHwpx } from '../../src/lib/hwpx/buildHwpx';
+import { HWPX_TEMPLATE_DIR, SECTION0_PATH } from '../../src/lib/hwpx/paths';
 import type { ListeningItem, ReadingItem } from '../../src/lib/types';
 
 // 문항 JSON(듣기 1-17 + 독해 18-45)을 이언어학원 시험지 양식 HWPX로 조립한다.
 // HWPX 조립은 문자열 치환 위주라 PDF와 마찬가지로 빠르며(수 초 이내) 동기 함수로 처리한다.
+//
+// 배포 후 templates/hwpx-template/가 실제로 함수 배포 패키지에 포함됐는지 확인하려면:
+// Netlify 대시보드 → 해당 사이트 → Functions 탭 → export-hwpx → Logs에서 아래 콜드 스타트
+// 로그를 확인한다(HWPX_TEMPLATE_DIR가 resolveTemplateDir로 어느 후보 경로를 찾았는지,
+// section0.xml exists 여부가 그대로 찍힌다).
+console.log(`[export-hwpx] HWPX_TEMPLATE_DIR=${HWPX_TEMPLATE_DIR}`);
+console.log(`[export-hwpx] SECTION0_PATH=${SECTION0_PATH} exists=${existsSync(SECTION0_PATH)}`);
+
 interface RequestBody {
   listening: ListeningItem[];
   reading: ReadingItem[];

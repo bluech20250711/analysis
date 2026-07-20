@@ -33,15 +33,42 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   return snippet ? `${fallback} (${statusInfo}): ${snippet}` : `${fallback} (${statusInfo})`;
 }
 
-export async function requestAudioClips(ttsApiKey: string, lines: TtsLineRequest[]): Promise<TtsLineResult[]> {
-  const response = await fetch('/.netlify/functions/generate-audio', {
+export async function startAudioClipGeneration(
+  jobId: string,
+  ttsApiKey: string,
+  lines: TtsLineRequest[],
+): Promise<void> {
+  const response = await fetch('/.netlify/functions/generate-audio-background', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey: ttsApiKey, lines }),
+    body: JSON.stringify({ jobId, apiKey: ttsApiKey, lines }),
   });
-  if (!response.ok) throw new Error(await readErrorMessage(response, 'TTS 생성에 실패했습니다.'));
-  const body = (await response.json()) as { clips: TtsLineResult[] };
-  return body.clips;
+  if (!response.ok) throw new Error(await readErrorMessage(response, 'TTS 생성 요청에 실패했습니다.'));
+}
+
+export type AudioClipsPoll =
+  | { status: 'pending' }
+  | { status: 'error'; message: string }
+  | { status: 'done'; clips: TtsLineResult[] };
+
+export async function pollAudioClipsOnce(jobId: string): Promise<AudioClipsPoll> {
+  const response = await fetch(`/.netlify/functions/get-audio-clips?jobId=${encodeURIComponent(jobId)}`);
+  if (!response.ok) throw new Error(await readErrorMessage(response, 'TTS 생성 상태 조회에 실패했습니다.'));
+  return (await response.json()) as AudioClipsPoll;
+}
+
+export async function pollAudioClipsUntilDone(
+  jobId: string,
+  { intervalMs = 3000, timeoutMs = 5 * 60 * 1000 }: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<TtsLineResult[]> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const result = await pollAudioClipsOnce(jobId);
+    if (result.status === 'done') return result.clips;
+    if (result.status === 'error') throw new Error(result.message);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('TTS 생성이 제한 시간 내에 끝나지 않았습니다.');
 }
 
 export async function startAudioMerge(jobId: string, segments: MergeSegment[]): Promise<void> {
