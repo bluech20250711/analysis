@@ -14,11 +14,13 @@
     "test:tts": "tsx scripts/test-tts.ts",
     "hwpx:reading-poc": "tsx scripts/hwpx-reading-poc.ts",
     "hwpx:full-exam-poc": "tsx scripts/hwpx-full-exam-poc.ts",
-    "test:merge-audio": "tsx scripts/test-merge-audio.ts"
+    "test:merge-audio": "tsx scripts/test-merge-audio.ts",
+    "pdf:full-exam-poc": "tsx --tsconfig tsconfig.scripts.json scripts/pdf-full-exam-poc.ts"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
     "@netlify/blobs": "^10.7.9",
+    "@react-pdf/renderer": "^4.5.1",
     "@tailwindcss/vite": "^4.3.3",
     "dotenv": "^17.4.2",
     "jszip": "^3.10.1",
