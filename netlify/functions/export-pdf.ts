@@ -11,6 +11,9 @@ import type { ExamSet } from '../../src/lib/types';
 // 배포 후 templates/pdf-template/가 실제로 함수 배포 패키지에 포함됐는지 확인하려면:
 // Netlify 대시보드 → 해당 사이트 → Functions 탭 → export-pdf → Logs에서 아래 콜드 스타트
 // 로그를 확인한다.
+console.log(
+  `[export-pdf] cwd=${process.cwd()} LAMBDA_TASK_ROOT=${process.env.LAMBDA_TASK_ROOT}`,
+);
 console.log(`[export-pdf] FONT_REGULAR_PATH=${FONT_REGULAR_PATH} exists=${existsSync(FONT_REGULAR_PATH)}`);
 console.log(`[export-pdf] FONT_BOLD_PATH=${FONT_BOLD_PATH} exists=${existsSync(FONT_BOLD_PATH)}`);
 
