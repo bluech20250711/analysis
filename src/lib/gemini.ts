@@ -81,9 +81,14 @@ const readingItemSchema: Schema = {
     passageKo: { type: Type.STRING },
     chartData: { ...readingTableSchema, nullable: true },
     choices: { type: Type.ARRAY, items: choiceSchema, nullable: true },
+    // 40번(요약문 완성) 전용 — (A)/(B) 두 그룹만 와야 한다. minItems/maxItems로
+    // Gemini가 그룹을 2개보다 많거나 적게 생성하지 않도록 명시(실사용 중 그룹을
+    // 2개보다 많이 생성해 검증이 실패하는 경우가 있어 추가).
     pairChoices: {
       type: Type.ARRAY,
       nullable: true,
+      minItems: '2',
+      maxItems: '2',
       items: { type: Type.ARRAY, items: choiceSchema },
     },
     answer: { type: Type.STRING },
@@ -154,7 +159,12 @@ const readingItemRawZod = z.object({
   passageKo: z.string(),
   chartData: readingTableZod.nullable().optional(),
   choices: z.array(choiceZod).nullable().optional(),
-  pairChoices: z.tuple([z.array(choiceZod), z.array(choiceZod)]).nullable().optional(),
+  // 엄격한 2-튜플로 강제하면 Gemini가 그룹을 2개보다 많이(또는 적게) 주는 경우
+  // 파싱 자체가 실패해 배치 전체(17~11문항)가 통째로 재시도되는 문제가 있었다
+  // (실사용 중 "too_big" 에러로 발견). 파싱 단계에서는 느슨하게 배열의 배열로만
+  // 받고, 실제로 40번 문항에만 의미 있게 쓰이도록 하는 판단은
+  // normalizeReadingItem에서 number === 40 기준으로 처리한다.
+  pairChoices: z.array(z.array(choiceZod)).nullable().optional(),
   answer: z.union([z.number(), z.string()]),
   explanation: z.string(),
   keyVocab: z.array(z.object({ word: z.string(), meaning: z.string() })).nullable().optional(),
@@ -173,6 +183,7 @@ async function callGeminiJson<T>(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let text: string | undefined;
     try {
       const response = await client.models.generateContent({
         model: GEMINI_MODEL,
@@ -184,7 +195,7 @@ async function callGeminiJson<T>(
         },
       });
 
-      const text = response.text;
+      text = response.text;
       if (!text) throw new Error('Gemini 응답에 텍스트가 없습니다.');
 
       const raw = JSON.parse(text);
@@ -192,16 +203,39 @@ async function callGeminiJson<T>(
     } catch (err) {
       lastError = err;
       console.warn(`[gemini] 시도 ${attempt}/${MAX_ATTEMPTS} 실패:`, err instanceof Error ? err.message : err);
+      // 검증 실패의 원인을 바로 파악할 수 있도록 Gemini가 실제로 응답한 원본 JSON을 그대로 남긴다
+      // (JSON 파싱 자체가 실패한 경우엔 text가 없을 수 있음).
+      if (text) {
+        console.warn(`[gemini] 시도 ${attempt}/${MAX_ATTEMPTS} 원본 응답:`, text);
+      }
     }
   }
 
   throw new Error(`Gemini 호출이 ${MAX_ATTEMPTS}회 모두 실패했습니다: ${lastError instanceof Error ? lastError.message : lastError}`);
 }
 
+const SUMMARY_ITEM_NUMBER = 40; // 요약문 완성(pairChoices 사용) 문항 번호 — 이 번호가 아니면 pairChoices는 무시한다.
+
 function normalizeReadingItem(raw: z.infer<typeof readingItemRawZod>): ReadingItem {
-  const choices = raw.pairChoices
-    ? { pairChoices: raw.pairChoices as [typeof raw.pairChoices[0], typeof raw.pairChoices[1]] }
-    : (raw.choices ?? []);
+  let choices: ReadingItem['choices'];
+
+  if (raw.number === SUMMARY_ITEM_NUMBER) {
+    const groups = raw.pairChoices ?? [];
+    if (groups.length !== 2) {
+      console.warn(
+        `[gemini] ${SUMMARY_ITEM_NUMBER}번 pairChoices 그룹 개수가 2가 아닙니다 (받은 개수: ${groups.length}).`,
+      );
+    }
+    if (groups.length < 2) {
+      throw new Error(
+        `${SUMMARY_ITEM_NUMBER}번 문항의 pairChoices가 올바르지 않습니다 (받은 그룹 수: ${groups.length}).`,
+      );
+    }
+    choices = { pairChoices: [groups[0], groups[1]] };
+  } else {
+    // 40번이 아닌 문항은 pairChoices를 절대 쓰지 않는다 — Gemini가 실수로 값을 채워도 무시.
+    choices = raw.choices ?? [];
+  }
 
   return {
     number: raw.number,

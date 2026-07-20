@@ -95,7 +95,7 @@
 Phase 8은 사용자가 실제 Netlify 계정으로 진행 중이며, 실사용 테스트에서 나온 문제를 세션에서 그때그때
 수정해왔다. **각 항목은 "고쳤다"이지 "실제로 성공했다"가 아니다** — 다음 재배포·재테스트에서 확인 필요:
 
-- ✅ **Gemini 문항 생성 — 실제 배포에서 성공 확인됨**: 듣기 17문항 + 독해 28문항 정상 생성(사용자 실테스트, `gemini-3.1-pro-preview`로 교체 후)
+- 🔧 **Gemini 문항 생성 — 최초 성공 후 40번 pairChoices Zod 검증 에러 발견 → 수정, 재검증 필요**: 듣기 17문항 + 독해 28문항 정상 생성을 한 번 확인했었으나(`gemini-3.1-pro-preview`로 교체 후) 이후 재테스트에서 `too_big` Zod 에러로 3회 재시도 전부 실패. 아래 "Gemini 문항 생성 모듈" 절 참고. **이 수정이 실제로 통했는지 다음 배포에서 재확인 필요**
 - 🔧 **HWPX 생성 — 502(ENOENT) 발견 → 수정, 재검증 필요**: `templates/hwpx-template/`가 함수 배포 패키지에 없어서 실패. `netlify.toml`의 `included_files` 추가로 1차 수정했으나 재테스트에서도 동일 에러가 재현됨 — `src/lib/resolveTemplateDir.ts`로 경로 탐색을 방어적으로 강화하고 콜드 스타트 진단 로그를 추가함(위 "배포 시 유의사항" 참고). **이 수정이 실제로 통했는지 다음 배포에서 재확인 필요**
 - 🔧 **TTS 생성 — 504(Timeout) 발견 → Background Function으로 전환, 미검증**: 기존 동기 함수가 문항 수만큼 순차 TTS 호출을 처리하다 10초 제한을 넘김. `generate-audio-background.ts` + `get-audio-clips.ts`(폴링)로 전환 완료했으나 **실제 배포에서 끝까지 성공하는지 아직 확인 안 됨**
 - ❓ **PDF 생성 — 아직 실제로 테스트된 적 없음**: `App.tsx` 파이프라인상 HWPX 실패 시 그 뒤 PDF 단계까지 도달하지 못해(Phase 7 완료 시점엔 HWPX/PDF가 순차 실행이라 하나가 throw하면 나머지가 실행 안 됐음 — 이번 세션에서 각 단계를 독립 try/catch로 분리해 수정) 실제로 호출된 적이 없다. HWPX와 동일한 `templates/pdf-template/` 누락 위험이 있어 `included_files`를 선제적으로 함께 넣었지만 **실제 배포 확인 안 됨**
@@ -119,6 +119,24 @@ Phase 8은 사용자가 실제 Netlify 계정으로 진행 중이며, 실사용 
 GEMINI_API_KEY=                    # scripts/test-gemini.ts 전용 (앱 런타임과 무관)
 GOOGLE_CLOUD_TTS_API_KEY=          # scripts/test-tts.ts 전용 (앱 런타임과 무관)
 ```
+
+## Gemini 문항 생성 모듈 (Phase 1 결과, 설계스펙 4절)
+
+`src/lib/gemini.ts` — 듣기(`generateListening`)/독해(`generateReading`) 각각 Gemini `responseSchema`(자체 JSON 스키마 강제)로 호출한 뒤, Zod(`listeningItemZod`/`readingItemRawZod`)로 한 번 더 검증하는 이중 구조. `callGeminiJson`이 최대 3회(`MAX_ATTEMPTS`) 재시도하는 공용 헬퍼.
+
+### ⚠️ 실사용 중 발견된 버그: 40번(요약문 완성) `pairChoices` Zod 검증 실패로 매 시도 전부 실패
+
+**증상**: 브라우저 콘솔에 Zod 에러 `{"code":"too_big","maximum":2,...,"path":["items",5,"pairChoices"]}`가 찍히며 3회 재시도 전부 실패. `path`의 `items[5]`는 `readingResponseSchema`가 감싸는 `items` 배열의 인덱스(0-based)라 실제로는 그 배치의 **6번째 문항**을 가리키는 것으로, 40번(요약문 완성) 자체가 6번째로 응답된 경우이거나 —Gemini가 40번이 아닌 문항에도 `pairChoices` 필드를 채워 보낸 경우—둘 다일 수 있었다(원본 응답 로그가 없어 이번 수정 전에는 확정할 수 없었음).
+
+**원인**: `readingItemRawZod.pairChoices`가 `z.tuple([z.array(choiceZod), z.array(choiceZod)])`로 **정확히 2개 그룹만** 허용하는 엄격한 튜플이었다. Gemini가 (a) 40번에 그룹을 2개보다 많이 생성했거나, (b) 40번이 아닌 다른 문항에도 실수로 `pairChoices`를 채워 보내면 파싱 자체가 예외를 던져 그 배치(18-34는 17문항, 35-45는 11문항) 전체가 재시도됐다.
+
+**수정** (`src/lib/gemini.ts`):
+1. Gemini 쪽 `responseSchema`의 `pairChoices`에 `minItems: '2', maxItems: '2'`를 추가해 애초에 Gemini가 2개보다 많거나 적은 그룹을 생성할 가능성을 줄임(완전한 보장은 아님 — Gemini가 스키마를 100% 지키지 않을 수 있어 아래 2, 3번이 실제 방어선).
+2. Zod 쪽은 엄격한 2-튜플 대신 `z.array(z.array(choiceZod)).nullable().optional()`로 완화 — 그룹 개수와 무관하게 일단 파싱은 통과시킨다.
+3. `normalizeReadingItem`에서 `number === 40`(요약문 완성 문항 번호, `SUMMARY_ITEM_NUMBER` 상수)일 때만 `pairChoices`를 사용하도록 명시적으로 게이팅. 그룹이 2개보다 많으면 앞의 2개만 사용하고 `console.warn`으로 경고, 2개 미만이면 에러를 던짐(40번인데 데이터가 근본적으로 부족한 경우). **40번이 아닌 문항은 `pairChoices`에 어떤 값이 와도 완전히 무시**하고 항상 `choices` 필드만 사용.
+4. `callGeminiJson`의 catch 블록에 Gemini가 실제로 응답한 원본 JSON 텍스트를 `console.warn`으로 남기도록 추가(`text` 변수를 try 블록 바깥에 선언해 catch에서도 접근 가능하게 함) — 이번처럼 Zod 에러의 `path`만으로는 원인을 확정할 수 없는 경우, 다음부터는 브라우저 콘솔에서 원본 응답을 바로 확인할 수 있음.
+
+로컬에서 `readingItemRawZod`/`normalizeReadingItem`을 일시적으로 `export`해 3가지 케이스(40번에 그룹 3개, 40번이 아닌 25번에 잘못 섞여 들어온 pairChoices, 40번에 그룹 1개만 온 경우)를 직접 실행해 의도대로 동작함을 확인한 뒤 다시 비공개로 되돌렸다. **실제 Gemini 응답으로 재현된 것은 아니라 다음 실배포 테스트에서 최종 확인 필요.**
 
 ## HWPX 템플릿 (Phase 2·3 결과, 설계스펙 6절)
 
