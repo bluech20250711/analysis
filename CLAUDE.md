@@ -70,7 +70,7 @@
 | 4 | Google Cloud TTS 개별 클립 생성 | 완료 |
 | 5 | ffmpeg 병합 (신호음/정적구간 포함) | 완료 — 아래 "오디오 병합 모듈(Phase 5 결과)" 참고 |
 | 6 | PDF 렌더러 구축 | 완료 — 아래 "PDF 렌더러 모듈(Phase 6 결과)" 참고 |
-| 7 | 프론트엔드 UI 통합 + 진행상태 표시 | 예정 |
+| 7 | 프론트엔드 UI 통합 + 진행상태 표시 | 완료 — 아래 "프론트엔드 통합 모듈(Phase 7 결과)" 참고 |
 | 8 | Netlify 배포 + Background Function 검증 | 예정 |
 | 9 | 정답지 별도 출력, 학교스타일 프리셋 등 확장 | 예정 |
 
@@ -186,6 +186,22 @@ HWPX와 완전히 별도 파이프라인(설계스펙 7절 "방식 A")으로 `@r
 - `scripts/pdf-full-exam-poc.ts` (`npm run pdf:full-exam-poc -- <출력경로.pdf>`) — hwpx-full-exam-poc.ts와 동일한 45문항 픽스처(`scripts/fixtures/sampleExamSet.ts`로 공유 추출)로 PDF 생성. `pdftoppm`/`pdftotext`(poppler-utils)로 각 페이지를 이미지·텍스트로 뽑아 실제로 눈으로 확인: 표지, 2단 배분, 25/27/28 이미지 placeholder, 40번 요약문 조합 선택지, 41-42/43-45 공유지문(지문 한 번만 인쇄), 정답 및 해설 섹션까지 전부 정상 렌더링 확인(총 10페이지 산출)
 - ⚠️ `tsx` CLI가 프로젝트 루트의 `tsconfig.json`(참조 전용, 자체 `jsx` 설정 없음)을 기본으로 읽어 JSX를 classic 방식으로 잘못 변환하는 문제가 있어, `pdf:full-exam-poc` 스크립트는 `tsx --tsconfig tsconfig.scripts.json`으로 명시적으로 지정(다른 스크립트들은 이 문제가 없어 그대로 둠 — JSX를 쓰는 스크립트가 이번이 처음)
 
+## 프론트엔드 통합 모듈 (Phase 7 결과)
+
+설계스펙의 전체 데이터 흐름(옵션 선택 → Gemini → TTS → ffmpeg 병합 → HWPX/PDF 주입 → 다운로드)을 `App.tsx`에서
+하나의 파이프라인으로 연결하고 단계별 진행상황을 표시한다.
+
+- `src/components/ExamOptionsForm.tsx` — 연도/학년/학원지점/EBS연계/학교스타일 옵션 입력
+- `src/components/GenerationProgress.tsx` — `{key, label}[]` 스텝 목록 + 현재 키를 받아 완료/진행중/대기 상태를 표시하는 범용 컴포넌트(TTS 키 유무에 따라 "음성 합성" 단계가 있고 없고를 동적으로 반영)
+- `src/components/DownloadPanel.tsx` — HWPX/PDF/MP3/JSON 다운로드 버튼(MP3는 TTS 키가 없거나 병합 실패 시 버튼 대신 사유 안내 문구 표시)
+- `src/lib/apiClient.ts` — 브라우저에서 Netlify Functions를 호출하는 fetch 래퍼(`generate-audio`, `merge-audio-background`, `get-merged-audio` 폴링, `export-hwpx`, `export-pdf`). Gemini 호출과 달리 이 함수들은 서버 리소스(ffmpeg/jszip/fontkit)가 필요해 서버리스 함수를 거친다
+- `src/lib/audioOrchestration.ts` — `synthesizeListeningAudio(ttsApiKey, listening)`가 대사별 TTS 요청 생성 → `generate-audio` 호출 → `buildListeningMergePlan`(오디오 병합 모듈, Phase 5)으로 병합 플랜 구성 → `merge-audio-background` 트리거 → `get-merged-audio` 폴링까지 한 번에 처리해 최종 mp3 Blob을 반환. `src/lib/audio/buildMergePlan.ts`가 Node 전용 API(fs/child_process)에 의존하지 않는 순수 로직이라 브라우저에서도 그대로 재사용 가능했음
+- `netlify/functions/export-hwpx.ts` — **Phase 7에서 신규 추가.** `buildFullExamHwpx`를 감싸는 동기 함수(export-pdf.ts와 동일한 패턴). 이전까지는 CLI 스크립트에서만 호출되고 있어 프론트엔드에서 HWPX를 요청할 방법이 없었음
+- `src/lib/gemini.ts`의 `generateExamSet`에 `onProgress?: (stage) => void` 콜백 추가(`GenerationStage = 'listening' | 'reading-18-34' | 'reading-35-45' | 'done'`) — `App.tsx`가 이 콜백을 그대로 진행상황 상태에 연결
+- `App.tsx`: 옵션 제출 → `generateExamSet`(진행상황 콜백 연결) → (TTS 키 있으면) `synthesizeListeningAudio` → `export-hwpx` → `export-pdf` → `DownloadPanel` 노출. 각 단계 실패는 개별적으로 처리(오디오 합성 실패는 전체 파이프라인을 막지 않고 MP3만 건너뛰며 사유를 안내, HWPX/PDF 실패는 전체 에러로 표시)
+
+**브라우저 검증**: 이 세션 환경은 실제 Gemini/TTS 키가 없고 `netlify dev`(Functions 로컬 실행)도 설정돼 있지 않아, `vite dev` + Playwright(헤드리스 Chromium, `/opt/pw-browsers` 사전 설치본 사용)로 클라이언트 쪽 동작만 실제로 확인했다: API 키 미설정 시 설정 화면 유도 → 가짜 Gemini 키 저장 후 메인 화면 전환 → 옵션 폼 기본값 정상 표시 → 생성 시작 시 진행상황 컴포넌트가 올바른 스텝 목록(TTS 키 없어 "음성 합성" 단계 제외)으로 뜨고 1단계가 활성 표시됨 → 실제 Gemini 호출이 (샌드박스 네트워크 제약으로) 3회 재시도 후 실패하며 에러 메시지가 정상 표시되고 폼이 다시 제출 가능한 상태로 복귀. TTS/오디오 병합/HWPX/PDF 서버리스 함수 자체는 각각 Phase 4~6에서 CLI 스크립트로 이미 개별 검증됐고, 이번에 추가한 `apiClient.ts`/`audioOrchestration.ts`는 그 API 계약을 그대로 따르는 얇은 래퍼라 별도 스모크 테스트 없이 코드 리뷰로 대조 확인함.
+
 ## 폴더 구조 (목표)
 
 ```
@@ -193,16 +209,18 @@ src/
 ├── components/        # ApiKeySettings, ExamOptionsForm, GenerationProgress, DownloadPanel
 ├── lib/
 │   ├── apiKeyStorage.ts  # localStorage 기반 Gemini/TTS 키 read/write
-│   ├── gemini.ts       # Gemini 호출(사용자 apiKey 인자) + JSON 파싱/검증
+│   ├── gemini.ts       # Gemini 호출(사용자 apiKey 인자) + JSON 파싱/검증 + onProgress 콜백
+│   ├── apiClient.ts    # 브라우저 → Netlify Functions fetch 래퍼(generate-audio/merge-audio-background/get-merged-audio/export-hwpx/export-pdf)
+│   ├── audioOrchestration.ts  # synthesizeListeningAudio — TTS 요청+병합 플랜+병합 트리거+폴링을 한 번에 처리
 │   ├── prompts/        # listeningPrompt.ts, readingPrompt.ts
 │   ├── types.ts        # ExamSet 등 타입 정의
 │   ├── hwpx/           # (Node 전용, 브라우저 번들 제외) HWPX 조립 — paths/textUtils/listeningFragment/listeningSection/readingSection/readingStyleConfig/buildHwpx
 │   ├── tts/            # (Node 전용) Google Cloud TTS 호출 — voices/googleTts/types
-│   ├── audio/          # (Node 전용) 오디오 병합 로직 — types/timing/buildMergePlan/ffmpegMerge (ffmpeg-static 미의존, 경로는 호출자가 주입)
+│   ├── audio/          # 오디오 병합 로직 — types/timing/buildMergePlan(브라우저에서도 재사용되는 순수 로직)/ffmpegMerge(Node 전용, ffmpeg-static 미의존, 경로는 호출자가 주입)
 │   └── pdf/            # (Node 전용) PDF 렌더러 — fonts/layout/blocks/buildPdf/components(react-pdf)
-├── App.tsx / main.tsx
+├── App.tsx / main.tsx  # 옵션 선택 → Gemini → (TTS 키 있으면) 음성합성/병합 → HWPX → PDF → 다운로드 파이프라인 전체 연결
 scripts/                # test-gemini.ts, hwpx-poc.ts, hwpx-listening-poc.ts, hwpx-reading-poc.ts, hwpx-full-exam-poc.ts, pdf-full-exam-poc.ts, test-tts.ts, test-merge-audio.ts, fixtures/sampleExamSet.ts (개발용 Node CLI 테스트)
-netlify/functions/      # generate-audio·merge-audio-background·get-merged-audio·export-pdf(완료), export-hwpx 예정 (TTS 키는 요청 시점 일회성 전달)
+netlify/functions/      # generate-audio·merge-audio-background·get-merged-audio·export-pdf·export-hwpx(전부 완료) (TTS 키는 요청 시점 일회성 전달)
 templates/
 ├── hwpx-template/      # 고등부.hwpx 압축 해제본 원본 + fragments/(파라미터화된 문항 조각 템플릿)
 └── pdf-template/       # fonts/(NotoSansKR-Regular.otf, NotoSansKR-Bold.otf — 한글+라틴 서브셋)
