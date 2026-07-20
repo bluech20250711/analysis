@@ -13,10 +13,12 @@
     "hwpx:listening-poc": "tsx scripts/hwpx-listening-poc.ts",
     "test:tts": "tsx scripts/test-tts.ts",
     "hwpx:reading-poc": "tsx scripts/hwpx-reading-poc.ts",
-    "hwpx:full-exam-poc": "tsx scripts/hwpx-full-exam-poc.ts"
+    "hwpx:full-exam-poc": "tsx scripts/hwpx-full-exam-poc.ts",
+    "test:merge-audio": "tsx scripts/test-merge-audio.ts"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
+    "@netlify/blobs": "^10.7.9",
     "@tailwindcss/vite": "^4.3.3",
     "dotenv": "^17.4.2",
     "jszip": "^3.10.1",
@@ -24,6 +26,9 @@
     "react-dom": "^19.2.7",
     "tailwindcss": "^4.3.3",
     "zod": "^4.4.3"
+  },
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.3.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
