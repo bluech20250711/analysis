@@ -71,8 +71,47 @@
 | 5 | ffmpeg 병합 (신호음/정적구간 포함) | 완료 — 아래 "오디오 병합 모듈(Phase 5 결과)" 참고 |
 | 6 | PDF 렌더러 구축 | 완료 — 아래 "PDF 렌더러 모듈(Phase 6 결과)" 참고 |
 | 7 | 프론트엔드 UI 통합 + 진행상태 표시 | 완료 — 아래 "프론트엔드 통합 모듈(Phase 7 결과)" 참고 |
-| 8 | Netlify 배포 + Background Function 검증 | 예정 |
+| 8 | Netlify 배포 + Background Function 검증 | 예정 — 사용자가 실제 Netlify 계정으로 직접 진행 예정 |
 | 9 | 정답지 별도 출력, 학교스타일 프리셋 등 확장 | 예정 |
+
+## 현재까지 진행 상황 요약 (Phase 1~7 완료, main 병합 완료)
+
+> 다음 세션은 Phase 8부터 시작하면 된다. 아래는 그 전에 파악해야 할 현재 상태 요약.
+
+### Phase별 핵심 산출물
+
+| Phase | 핵심 산출물 |
+|---|---|
+| 1 | `src/lib/gemini.ts`(듣기/독해 Gemini 호출 + Zod/JSON Schema 이중 검증), `src/lib/apiKeyStorage.ts` + `ApiKeySettings.tsx`(BYOK 키를 localStorage에만 저장) |
+| 2 | `scripts/hwpx-poc.ts` — `templates/hwpx-template/`(고등부.hwpx 압축 해제본)에서 1번 문항 조각을 추출해 텍스트만 치환하는 최소 PoC |
+| 3 | `src/lib/hwpx/`(listeningSection.ts, readingSection.ts, buildHwpx.ts) — 듣기 1-17 + 독해 18-45 **45문항 전체**를 `buildFullExamHwpx()`로 한 hwpx에 조립. 정답/해설/해석은 각주(`hp:endNote`)로 숨김. `npm run hwpx:full-exam-poc`로 검증 |
+| 4 | `src/lib/tts/`(voices.ts, googleTts.ts) + `netlify/functions/generate-audio.ts` — Google Cloud TTS Chirp3-HD로 화자별 개별 클립 생성 |
+| 5 | `src/lib/audio/`(buildMergePlan.ts, ffmpegMerge.ts, timing.ts) + `netlify/functions/merge-audio-background.ts`(Background Function) + `get-merged-audio.ts`(폴링) — 신호음/정적구간 포함 최종 mp3 병합. `npm run test:merge-audio`로 검증 |
+| 6 | `src/lib/pdf/`(react-pdf 기반, 한글 서브셋 폰트 `templates/pdf-template/fonts/`) + `netlify/functions/export-pdf.ts` — 표지+2단 문제지+정답/해설 섹션 PDF. `npm run pdf:full-exam-poc`로 검증(총 10페이지, 눈으로 확인) |
+| 7 | `src/components/`(ExamOptionsForm, GenerationProgress, DownloadPanel) + `src/lib/apiClient.ts` + `src/lib/audioOrchestration.ts` + `netlify/functions/export-hwpx.ts`(신규) — `App.tsx`에서 옵션→Gemini→(TTS 있으면)음성합성/병합→HWPX→PDF→다운로드 전체 파이프라인 연결 |
+
+### ⚠️ 아직 실제 Netlify 배포 환경에서 검증 안 된 부분
+
+이 프로젝트를 진행한 개발 세션들은 전부 로컬 sandbox(Netlify 계정·배포 없음)였다. 아래는 코드 로직 자체는
+CLI 스크립트로 개별 검증했지만, **실제 Netlify Functions로 배포된 상태에서 브라우저로 엔드투엔드 호출한 적은
+한 번도 없다**:
+
+- `generate-audio.ts` — 실제 `GOOGLE_CLOUD_TTS_API_KEY`로 진짜 음성 합성 안 해봄(Phase 4: Node fetch로 TTS 엔드포인트까지 도달만 확인)
+- `merge-audio-background.ts` / `get-merged-audio.ts` — 실제 배포에서 Background Function이 정말 10초 제한 없이 최대 15분까지 도는지, `@netlify/blobs`가 실제 배포 환경에서 정상 동작하는지 미검증(로컬에서는 시스템 ffmpeg로 병합 로직만 검증)
+- `export-hwpx.ts` / `export-pdf.ts` — 로컬 CLI 스크립트로는 검증됐지만 Netlify Functions로 배포된 상태에서 브라우저 fetch로 호출한 적 없음
+- `ffmpeg-static` — `optionalDependencies`로 선언만 해두고, **Netlify 빌드 서버에서 실제로 설치되어 바이너리 경로가 잡히는지 확인 안 됨**(이 세션들은 프록시 제약으로 설치 자체가 안 됐음 — 실제 배포에서도 설치가 안 되면 Phase 5 전체가 동작하지 않음, 최우선 확인 대상)
+- `App.tsx`의 전체 파이프라인 — Playwright로 클라이언트 쪽 흐름(옵션 폼, 진행상황 컴포넌트, Gemini 에러 처리)만 확인했고, 실제 키로 Gemini→TTS→병합→HWPX/PDF까지 끝까지 성공하는 것은 확인한 적 없음
+
+### Phase 8 시작 시 확인 체크리스트
+
+1. **Netlify 사이트 연결**: 이 GitHub 저장소(`bluech20250711/analysis`)를 Netlify 사이트에 연결(Continuous Deployment)
+2. **빌드 설정 확인**: `netlify.toml`의 `command = "npm run build"`, `publish = "dist"`, `functions = "netlify/functions"`가 실제 배포에도 그대로 적용되는지
+3. **`ffmpeg-static` 설치 여부 최우선 확인**: Netlify 빌드 로그에서 `ffmpeg-static`의 postinstall(바이너리 다운로드)이 성공하는지 확인 — 실패하면 Phase 5(오디오 병합) 전체가 죽는다. 실패 시 `ffmpeg-static` 대신 다른 배포 방식(예: Netlify 빌드 플러그인, 별도 레이어) 검토 필요
+4. **환경변수**: 이 앱은 BYOK라 서버 환경변수에 API 키를 넣지 않는다 — Netlify 사이트 환경변수에는 앱 런타임에 필요한 값이 원래 없어야 정상(있다면 실수로 키를 넣은 것일 수 있으니 확인). `.env.example`의 `GEMINI_API_KEY`/`GOOGLE_CLOUD_TTS_API_KEY`는 로컬 CLI 스크립트 전용이며 배포와 무관
+5. **Background Function 동작 확인**: `merge-audio-background.ts`가 실제로 Netlify에서 Background Function으로 인식되는지(함수 목록에서 실행시간 제한이 다르게 표시되는지), `@netlify/blobs`가 별도 설정 없이 동작하는지
+6. **엔드투엔드 실제 키 테스트**: 실제 Gemini API 키 + Google Cloud TTS 키로 옵션 제출 → 45문항 생성 → 음성 합성 → 오디오 병합 → HWPX/PDF 다운로드까지 브라우저에서 전체 흐름을 한 번은 직접 실행해 확인
+7. **HWPX/PDF 결과물 육안 확인**: 실제 생성된 hwpx를 한글에서, pdf를 뷰어에서 열어 이번 세션이 CLI로 검증한 내용(줄바꿈, 2단 배분, 각주, 이미지 placeholder 등)이 실제 배포 환경 산출물에서도 동일하게 보이는지 확인
+8. **HWPX 출력 파일명 ASCII 확인**: 배포 시 실제 다운로드 파일명이 한글 파일명 깨짐 없이 내려가는지(설계스펙 6절 — ASCII 파일명 + 한글 표시명 분리 원칙)
 
 ## 환경변수
 
