@@ -11,6 +11,9 @@ import type { ListeningItem, ReadingItem } from '../../src/lib/types';
 // Netlify 대시보드 → 해당 사이트 → Functions 탭 → export-hwpx → Logs에서 아래 콜드 스타트
 // 로그를 확인한다(HWPX_TEMPLATE_DIR가 resolveTemplateDir로 어느 후보 경로를 찾았는지,
 // section0.xml exists 여부가 그대로 찍힌다).
+console.log(
+  `[export-hwpx] cwd=${process.cwd()} LAMBDA_TASK_ROOT=${process.env.LAMBDA_TASK_ROOT}`,
+);
 console.log(`[export-hwpx] HWPX_TEMPLATE_DIR=${HWPX_TEMPLATE_DIR}`);
 console.log(`[export-hwpx] SECTION0_PATH=${SECTION0_PATH} exists=${existsSync(SECTION0_PATH)}`);
 

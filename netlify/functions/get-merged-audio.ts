@@ -1,5 +1,5 @@
 import type { Handler } from '@netlify/functions';
-import { getStore } from '@netlify/blobs';
+import { getJobStore } from '../../src/lib/netlifyBlobsStore';
 
 // merge-audio-background.ts(Background Function)가 완료될 때까지 프론트에서 폴링하는 엔드포인트.
 // 사용법: GET /.netlify/functions/get-merged-audio?jobId=<merge-audio-background 호출 시 넘긴 jobId>
@@ -13,7 +13,7 @@ export const handler: Handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: 'jobId 쿼리 파라미터가 필요합니다.' }) };
   }
 
-  const store = getStore('audio-merge-jobs');
+  const store = getJobStore('audio-merge-jobs');
   const statusRaw = await store.get(`${jobId}/status`, { type: 'text' });
 
   if (!statusRaw) {

@@ -1,6 +1,6 @@
 import type { BackgroundHandler } from '@netlify/functions';
-import { getStore } from '@netlify/blobs';
 import { synthesizeLines } from '../../src/lib/tts/googleTts';
+import { connectBlobsForBackgroundFunction, getJobStore } from '../../src/lib/netlifyBlobsStore';
 import type { TtsLineRequest, TtsLineResult } from '../../src/lib/tts/types';
 
 // 개별 TTS 클립 생성도 문항 수가 많으면(Google Cloud TTS 분당 요청 제한을 고려해 순차
@@ -13,13 +13,14 @@ interface RequestBody {
   lines: TtsLineRequest[];
 }
 
-function getJobStore() {
-  return getStore('audio-clip-jobs');
-}
-
 export const handler: BackgroundHandler = async (event) => {
+  // Background Function은 일반 동기 함수와 달리 Netlify Blobs 컨텍스트가 자동으로
+  // 주입되지 않을 수 있다(실사용 중 MissingBlobsEnvironmentError 확인) — getStore 호출 전에
+  // 반드시 먼저 연결한다.
+  connectBlobsForBackgroundFunction(event);
+
   const { jobId, apiKey, lines } = JSON.parse(event.body ?? '{}') as RequestBody;
-  const store = getJobStore();
+  const store = getJobStore('audio-clip-jobs');
 
   try {
     if (!jobId) throw new Error('jobId가 필요합니다.');
