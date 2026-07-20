@@ -28,11 +28,4 @@ export const READING_STYLE = {
   // 페이지당 문항 배치 밀도 참고치(실제 시험지 관찰 결과) — 아직 자동 페이지 분할 로직에는
   // 반영하지 않았고, 향후 여러 페이지로 나눌 때 참고할 값
   approxStandardItemsPerColumn: 2, // 표준형(지문+5지선다) 기준
-
-  // 이미지가 필요한 문항의 placeholder (25번 도표·27-28번 안내문 포함 — 실제 시험지에서도
-  // 표가 아니라 이미지로 삽입됨을 실제 hwpx 참고자료로 확인). 실제 이미지 생성 파이프라인
-  // 도입 전까지 기존 BinData 이미지를 재사용한다 — 내용상 문항과 무관한 자리표시용일 뿐이다.
-  placeholderImageBinDataId: 'image1',
-  placeholderImageWidth: 8000,
-  placeholderImageHeight: 6000,
 } as const;

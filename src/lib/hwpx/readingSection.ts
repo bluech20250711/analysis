@@ -1,6 +1,6 @@
 import type { Choice, ReadingItem } from '../types';
 import { READING_STYLE } from './readingStyleConfig';
-import { circledNumber, escapeXmlText } from './textUtils';
+import { buildLinesegArrayForText, buildSimpleParagraphXml, circledNumber, escapeXmlText } from './textUtils';
 
 // 독해 18-45번 섹션을 처음부터 새로 조립하는 모듈.
 // 실제 이언어학원 독해 템플릿이 없어(CLAUDE.md 참고) 원본 조각을 추출하는 대신
@@ -12,11 +12,17 @@ import { circledNumber, escapeXmlText } from './textUtils';
 //   이 다단 설정은 우리 템플릿(templates/hwpx-template)에도 원래부터 있었다(이전 분석에서 놓침).
 //   따라서 문항들은 좌/우 컬럼을 직접 나눌 필요 없이 그냥 순서대로 이어붙이면 HWP가 알아서
 //   컬럼에 배분한다 — 표 기반 2단 구현(wrapInTwoColumnTable 등)은 전부 제거함.
-// - 25번(도표)·27-28번(안내문)은 표가 아니라 실제로 "이미지"로 삽입되어 있다(BinData에 그림 파일).
-//   우리는 이미지 생성 파이프라인이 없으므로 기존 placeholder 이미지로 대체한다(4번과 동일 패턴).
+// - 25번(도표)·27-28번(안내문)은 표가 아니라 실제로 "이미지"로 삽입되어 있다. 우리는 실제
+//   이미지 생성 파이프라인이 없으므로 텍스트 placeholder로 대체한다(아래 참고).
 // - 41-42/43-45번 공유 지문도 테두리 박스 없이 일반 문단으로 되어 있다.
 // - 정답/해설은 참고자료에서는 각주 처리가 안 되어 있었지만, 사용자 요청에 따라 듣기와 동일하게
 //   각주(hp:endNote)로 숨기고 해석(passageKo)도 함께 넣어 미주 답지 형태로 구현한다.
+//
+// ⚠️ 실사용 중 발견된 버그와 수정: 문단마다 <hp:lineseg>를 1개만 넣었더니, 여러 줄로
+// 줄바꿈되는 긴 지문에서 한글이 실제 줄 수를 몰라 텍스트가 겹쳐 보였다. 이제
+// textUtils.buildSimpleParagraphXml()로 텍스트 길이에 맞는 lineseg 배열을 생성한다.
+// 또한 이미지 placeholder로 재사용했던 BinData 이미지가 실제로는 이언어학원 뒷표지
+// 배경 그림이라 어색하게 작게 나왔다 — 그림 대신 안내 텍스트로 대체했다.
 
 let idCounter = 500000000;
 function nextId(): number {
@@ -25,7 +31,7 @@ function nextId(): number {
 }
 
 function simpleParagraph(text: string, charPrId: number, paraPrId: number, width: number): string {
-  return `<hp:p id="0" paraPrIDRef="${paraPrId}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${charPrId}"><hp:t>${escapeXmlText(text)}</hp:t></hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="800" textheight="800" baseline="680" spacing="480" horzpos="0" horzsize="${width}" flags="393216"/></hp:linesegarray></hp:p>`;
+  return buildSimpleParagraphXml(text, charPrId, paraPrId, width);
 }
 
 function emptyParagraph(width: number): string {
@@ -71,19 +77,19 @@ function buildAnswerEndNote(
 }
 
 function stemParagraph(item: ReadingItem, width: number): string {
+  const numberLabel = `${item.number}. `;
   const endNoteXml = buildAnswerEndNote(item.number, String(item.answer), item.explanation, item.passageKo, item.keyVocab);
-  return `<hp:p id="0" paraPrIDRef="${READING_STYLE.defaultParaPrId}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${READING_STYLE.bodyCharPrId}"><hp:t>${item.number}. </hp:t></hp:run><hp:run charPrIDRef="${READING_STYLE.instructionCharPrId}"><hp:t>${escapeXmlText(item.instruction)}</hp:t>${endNoteXml}<hp:t/></hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="800" textheight="800" baseline="680" spacing="400" horzpos="0" horzsize="${width}" flags="393216"/></hp:linesegarray></hp:p>`;
+  // 두 run(번호 + 지시문)의 합쳐진 텍스트 기준으로 줄바꿈을 계산한다.
+  const linesegXml = buildLinesegArrayForText(numberLabel + item.instruction, width);
+  return `<hp:p id="0" paraPrIDRef="${READING_STYLE.defaultParaPrId}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${READING_STYLE.bodyCharPrId}"><hp:t>${escapeXmlText(numberLabel)}</hp:t></hp:run><hp:run charPrIDRef="${READING_STYLE.instructionCharPrId}"><hp:t>${escapeXmlText(item.instruction)}</hp:t>${endNoteXml}<hp:t/></hp:run>${linesegXml}</hp:p>`;
 }
 
-// 이미지가 필요한 문항의 자리표시 이미지 (25번 도표·27-28번 안내문 등 — 실제 시험지에서도
-// 표가 아니라 이미지로 삽입됨을 실제 hwpx 참고자료로 확인함). 실제 이미지 생성 파이프라인
-// 도입 전까지 기존 BinData 이미지를 재사용한다.
+// 이미지가 필요한 문항의 자리표시 텍스트 (25번 도표·27-28번 안내문 등 — 실제 시험지에서도
+// 표가 아니라 이미지로 삽입됨을 실제 hwpx 참고자료로 확인함). 실제 이미지 생성 파이프라인이
+// 없어 그림 대신 안내 텍스트로 대체한다 — 기존 BinData 이미지를 재사용하면 이언어학원
+// 표지/배경용 그림이 엉뚱하게 작게 삽입되는 문제가 있어 이 방식으로 전환했다.
 function imagePlaceholderParagraph(description: string, width: number): string {
-  const picId = nextId();
-  const instId = nextId();
-  const { placeholderImageBinDataId, placeholderImageWidth, placeholderImageHeight } = READING_STYLE;
-
-  return `<hp:p id="0" paraPrIDRef="${READING_STYLE.defaultParaPrId}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${READING_STYLE.bodyCharPrId}"><hp:pic id="${picId}" zOrder="1" numberingType="NONE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${instId}" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="${placeholderImageWidth}" height="${placeholderImageHeight}"/><hp:curSz width="${placeholderImageWidth}" height="${placeholderImageHeight}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="${placeholderImageBinDataId}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="${placeholderImageWidth}" y="0"/><hc:pt2 x="${placeholderImageWidth}" y="${placeholderImageHeight}"/><hc:pt3 x="0" y="${placeholderImageHeight}"/></hp:imgRect><hp:imgClip left="0" right="0" top="0" bottom="0"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="${placeholderImageWidth}" dimheight="${placeholderImageHeight}"/><hp:effects/><hp:sz width="${placeholderImageWidth}" widthRelTo="ABSOLUTE" height="${placeholderImageHeight}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="1" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>placeholder image — ${escapeXmlText(description)}</hp:shapeComment></hp:pic><hp:t/></hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="800" textheight="800" baseline="680" spacing="480" horzpos="0" horzsize="${width}" flags="393216"/></hp:linesegarray></hp:p>`;
+  return simpleParagraph(`[이미지 자리표시 — ${description}]`, READING_STYLE.bodyCharPrId, READING_STYLE.defaultParaPrId, width);
 }
 
 function passageParagraphs(passage: string, width: number): string {
@@ -97,7 +103,7 @@ function trailingSpacer(width: number): string {
   return emptyParagraph(width) + emptyParagraph(width);
 }
 
-// 18-39 등 표준형(25/27/28번 포함): 지시문 + 지문 + (필요 시 이미지) + 5지선다.
+// 18-39 등 표준형(25/27/28번 포함): 지시문 + 지문 + (필요 시 이미지 자리표시) + 5지선다.
 // 25번(도표)·27-28번(안내문)도 imageRef를 채워 이 함수로 렌더링한다(표 아님, 이미지 자리표시).
 export function renderStandardReadingItem(item: ReadingItem, width = READING_STYLE.columnWidth): string {
   if (Array.isArray(item.choices) === false) {

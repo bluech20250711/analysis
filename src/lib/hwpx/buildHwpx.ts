@@ -112,20 +112,26 @@ export async function buildListeningExamHwpx(listening: ListeningItem[]): Promis
   return zip.generateAsync({ type: 'nodebuffer', platform: 'UNIX' });
 }
 
+// 원본 문서 맨 끝의 "정답" 라벨 문단 — 독해 섹션은 이 라벨 앞(듣기 뒤)에 삽입해야 한다.
+// (이전 버전은 </hs:sec> 바로 앞에 삽입해 "정답" 라벨 뒤에 붙는 순서 오류가 있었음)
+const TAIL_LABEL_MARKER = '<hp:t>정답</hp:t>';
+
 // 독해(18-45번) 섹션 PoC: 원본 문서(표지+듣기 1-17번)는 그대로 두고,
-// 문서 맨 끝에 새 독해 섹션을 추가한다. 문항들은 순서대로 이어붙이기만 하면 되는데,
-// 우리 템플릿에 이미 있는 진짜 다단(hp:colPr, NEWSPAPER 2단) 설정이 문서 전체에
-// 적용되어 있어 HWP가 자동으로 좌/우 컬럼에 배분한다(표 기반 2단 구현 불필요 — CLAUDE.md 참고).
+// 문서 끝의 "정답" 라벨 앞에 새 독해 섹션을 추가한다. 문항들은 순서대로 이어붙이기만
+// 하면 되는데, 우리 템플릿에 이미 있는 진짜 다단(hp:colPr, NEWSPAPER 2단) 설정이 문서
+// 전체에 적용되어 있어 HWP가 자동으로 좌/우 컬럼에 배분한다(표 기반 2단 구현 불필요 — CLAUDE.md 참고).
 // 실제 이언어학원 독해 템플릿이 없어 처음부터 새로 구성한 레이아웃이다.
 export async function buildReadingSectionPoCHwpx(readingSectionXml: string): Promise<Buffer> {
   await stat(SECTION0_PATH);
   const originalSection0 = await readFile(SECTION0_PATH, 'utf-8');
 
-  const closingTagIdx = originalSection0.lastIndexOf('</hs:sec>');
-  if (closingTagIdx === -1) throw new Error('section0.xml에서 </hs:sec> 종료 태그를 찾을 수 없습니다.');
+  const tailLabelIdx = originalSection0.lastIndexOf(TAIL_LABEL_MARKER);
+  if (tailLabelIdx === -1) throw new Error('section0.xml에서 "정답" 라벨 문단을 찾을 수 없습니다.');
+  const insertAt = originalSection0.lastIndexOf('<hp:p ', tailLabelIdx);
+  if (insertAt === -1) throw new Error('"정답" 라벨의 시작 <hp:p> 태그를 찾을 수 없습니다.');
 
   const newSection0 =
-    originalSection0.slice(0, closingTagIdx) + readingSectionXml + originalSection0.slice(closingTagIdx);
+    originalSection0.slice(0, insertAt) + readingSectionXml + originalSection0.slice(insertAt);
 
   const zip = new JSZip();
   await addTemplateFilesToZip(zip);
