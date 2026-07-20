@@ -10,7 +10,7 @@ const TEST_OPTIONS: ExamOptions = {
   yearLevel: '2027학년도 수능 대비 / 고3 6월 모의평가 수준',
   ebsLinked: false,
   grade: '고3',
-  academyBranch: '석우관',
+  academyBranch: '이언어학원 나루관',
 };
 
 function App() {
