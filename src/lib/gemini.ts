@@ -270,10 +270,23 @@ function extractTopics(reading: ReadingItem[]): string[] {
   return reading.map((item) => `${item.number}번(${item.type}): ${item.passage.slice(0, 40)}...`);
 }
 
-export async function generateExamSet(apiKey: string, options: ExamOptions): Promise<ExamSet> {
+export type GenerationStage = 'listening' | 'reading-18-34' | 'reading-35-45' | 'done';
+
+export async function generateExamSet(
+  apiKey: string,
+  options: ExamOptions,
+  onProgress?: (stage: GenerationStage) => void,
+): Promise<ExamSet> {
+  onProgress?.('listening');
   const listening = await generateListening(apiKey, options);
+
+  onProgress?.('reading-18-34');
   const reading1834 = await generateReading(apiKey, options, '18-34', []);
+
+  onProgress?.('reading-35-45');
   const reading3545 = await generateReading(apiKey, options, '35-45', extractTopics(reading1834));
+
+  onProgress?.('done');
 
   return {
     metadata: {
