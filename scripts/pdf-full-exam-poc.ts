@@ -10,7 +10,7 @@ import type { ExamSet } from '../src/lib/types';
 const sampleExamSet: ExamSet = {
   metadata: {
     title: '2027학년도 수능 대비 실전모의고사',
-    academyBranch: '석우관',
+    academyBranch: '이언어학원 나루관',
     grade: '고3',
     createdAt: new Date().toISOString(),
   },
