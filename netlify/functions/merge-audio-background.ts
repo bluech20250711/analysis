@@ -1,9 +1,11 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { BackgroundHandler } from '@netlify/functions';
+import { resolveMergeSegments } from '../../src/lib/audio/buildMergePlan';
 import { mergeSegmentsToMp3 } from '../../src/lib/audio/ffmpegMerge';
-import type { MergeSegment } from '../../src/lib/audio/types';
+import type { MergeSegmentSpec } from '../../src/lib/audio/types';
 import { connectBlobsForBackgroundFunction, getJobStore } from '../../src/lib/netlifyBlobsStore';
+import type { TtsLineResult } from '../../src/lib/tts/types';
 
 // Phase 5: 듣기 1-17번 개별 TTS 클립 + 신호음 + 정적구간을 하나의 MP3로 병합한다.
 // ffmpeg 병합은 Netlify 동기 함수의 10초 제한을 넘길 수 있어 Background Function으로 분리했다
@@ -13,7 +15,8 @@ import { connectBlobsForBackgroundFunction, getJobStore } from '../../src/lib/ne
 
 interface RequestBody {
   jobId: string;
-  segments: MergeSegment[];
+  clipsJobId: string; // generate-audio-background가 audio-clip-jobs 스토어에 클립을 저장할 때 쓴 jobId
+  segments: MergeSegmentSpec[]; // 클립 id만 참조하는 경량 스펙 — 실제 오디오는 clipsJobId로 조회
 }
 
 // ffmpeg-static은 optionalDependencies로 선언되어 있다 — Netlify 빌드 환경(전체 인터넷 접근
@@ -42,17 +45,28 @@ export const handler: BackgroundHandler = async (event) => {
   // 반드시 먼저 연결한다.
   connectBlobsForBackgroundFunction(event);
 
-  const { jobId, segments } = JSON.parse(event.body ?? '{}') as RequestBody;
+  const { jobId, clipsJobId, segments } = JSON.parse(event.body ?? '{}') as RequestBody;
   const store = getJobStore('audio-merge-jobs');
 
   try {
     if (!jobId) throw new Error('jobId가 필요합니다.');
+    if (!clipsJobId) throw new Error('clipsJobId가 필요합니다.');
     if (!Array.isArray(segments) || segments.length === 0) throw new Error('segments가 비어있습니다.');
 
     const ffmpegPath = resolveFfmpegPath();
     if (!ffmpegPath) throw new Error('ffmpeg 바이너리 경로를 찾을 수 없습니다(ffmpeg-static 설치 상태를 확인하세요).');
 
-    const buffer = await mergeSegmentsToMp3(segments, ffmpegPath);
+    // 실제 오디오 바이트는 요청 본문이 아니라 generate-audio-background가 이미 저장해둔
+    // audio-clip-jobs 스토어에서 직접 읽어온다 — 요청 본문에 통째로 실으면 AWS Lambda 비동기
+    // invoke 페이로드 한도를 넘겨 500 Internal Error로 거부당할 수 있다(실사용 중 발견).
+    const clipsStore = getJobStore('audio-clip-jobs');
+    const clipsRaw = await clipsStore.get(`${clipsJobId}/clips.json`, { type: 'text' });
+    if (!clipsRaw) throw new Error(`클립 데이터를 찾을 수 없습니다 (clipsJobId=${clipsJobId}).`);
+    const clips = JSON.parse(clipsRaw) as TtsLineResult[];
+    const clipsById = new Map(clips.map((clip) => [clip.id, clip.audioBase64]));
+
+    const resolvedSegments = resolveMergeSegments(segments, clipsById);
+    const buffer = await mergeSegmentsToMp3(resolvedSegments, ffmpegPath);
     const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
 
     await store.set(`${jobId}/result.mp3`, arrayBuffer);
