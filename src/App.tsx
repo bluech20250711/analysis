@@ -7,10 +7,12 @@ import { getGeminiApiKey, getTtsApiKey, hasGeminiApiKey } from './lib/apiKeyStor
 import { generateExamSet, type GenerationStage } from './lib/gemini';
 import { requestHwpx, requestPdf } from './lib/apiClient';
 import { synthesizeListeningAudio } from './lib/audioOrchestration';
+import { loadExamSet, saveExamSet } from './lib/examSetStorage';
 import type { ExamSet, ExamOptions } from './lib/types';
 
 type View = 'main' | 'settings';
 type PipelineStage = GenerationStage | 'audio' | 'hwpx' | 'pdf';
+type RetryableStage = 'audio' | 'hwpx' | 'pdf';
 
 const DEFAULT_OPTIONS: ExamOptions = {
   yearLevel: '2027학년도 수능 대비 / 고3 6월 모의평가 수준',
@@ -41,13 +43,16 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [stage, setStage] = useState<PipelineStage | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [examSet, setExamSet] = useState<ExamSet | null>(null);
+  // 뒷단계(TTS/HWPX/PDF)가 실패해도 Gemini를 다시 호출하지 않고 이미 생성된 문항으로 그
+  // 단계만 재시도할 수 있도록, 마지막으로 생성된 문항 JSON을 localStorage에서 복원해온다.
+  const [examSet, setExamSet] = useState<ExamSet | null>(() => loadExamSet());
   const [hwpxBlob, setHwpxBlob] = useState<Blob | undefined>();
   const [pdfBlob, setPdfBlob] = useState<Blob | undefined>();
   const [audioBlob, setAudioBlob] = useState<Blob | undefined>();
   const [audioSkippedReason, setAudioSkippedReason] = useState<string | undefined>();
   const [hwpxFailedReason, setHwpxFailedReason] = useState<string | undefined>();
   const [pdfFailedReason, setPdfFailedReason] = useState<string | undefined>();
+  const [retryingStage, setRetryingStage] = useState<RetryableStage | null>(null);
 
   const loading = stage !== null && stage !== 'done';
   const ttsApiKey = getTtsApiKey();
@@ -75,6 +80,7 @@ function App() {
       const geminiApiKey = getGeminiApiKey()!;
       const generated = await generateExamSet(geminiApiKey, options, setStage);
       setExamSet(generated);
+      saveExamSet(generated);
 
       if (ttsApiKey) {
         setStage('audio');
@@ -113,6 +119,50 @@ function App() {
     }
   };
 
+  // TTS/HWPX/PDF는 이미 생성돼 있는 examSet(문항 JSON)만 다시 사용해 해당 단계만 재시도한다.
+  // Gemini를 다시 호출하지 않으므로 디버깅/재배포 검증 중에도 API 호출을 반복 소모하지 않는다.
+  const handleRetryAudio = async () => {
+    if (!examSet || !ttsApiKey) return;
+    setRetryingStage('audio');
+    setAudioSkippedReason(undefined);
+    try {
+      const audio = await synthesizeListeningAudio(ttsApiKey, examSet.listening);
+      setAudioBlob(audio);
+    } catch (audioErr) {
+      setAudioSkippedReason(`듣기 MP3 생성에 실패했습니다: ${audioErr instanceof Error ? audioErr.message : audioErr}`);
+    } finally {
+      setRetryingStage(null);
+    }
+  };
+
+  const handleRetryHwpx = async () => {
+    if (!examSet) return;
+    setRetryingStage('hwpx');
+    setHwpxFailedReason(undefined);
+    try {
+      const hwpx = await requestHwpx(examSet.listening, examSet.reading);
+      setHwpxBlob(hwpx);
+    } catch (hwpxErr) {
+      setHwpxFailedReason(hwpxErr instanceof Error ? hwpxErr.message : String(hwpxErr));
+    } finally {
+      setRetryingStage(null);
+    }
+  };
+
+  const handleRetryPdf = async () => {
+    if (!examSet) return;
+    setRetryingStage('pdf');
+    setPdfFailedReason(undefined);
+    try {
+      const pdf = await requestPdf(examSet);
+      setPdfBlob(pdf);
+    } catch (pdfErr) {
+      setPdfFailedReason(pdfErr instanceof Error ? pdfErr.message : String(pdfErr));
+    } finally {
+      setRetryingStage(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-800">
       <header className="flex items-center justify-between px-6 py-4 bg-white border-b">
@@ -145,7 +195,11 @@ function App() {
           />
         ) : (
           <div className="max-w-2xl mx-auto space-y-4">
-            <ExamOptionsForm initialOptions={DEFAULT_OPTIONS} onSubmit={handleGenerate} disabled={loading} />
+            <ExamOptionsForm
+              initialOptions={DEFAULT_OPTIONS}
+              onSubmit={handleGenerate}
+              disabled={loading || retryingStage !== null}
+            />
 
             {loading && <GenerationProgress steps={steps} currentKey={stage} />}
 
@@ -178,6 +232,11 @@ function App() {
                 audioSkippedReason={audioSkippedReason}
                 hwpxFailedReason={hwpxFailedReason}
                 pdfFailedReason={pdfFailedReason}
+                ttsApiKeyAvailable={!!ttsApiKey}
+                retryingStage={retryingStage}
+                onRetryAudio={handleRetryAudio}
+                onRetryHwpx={handleRetryHwpx}
+                onRetryPdf={handleRetryPdf}
               />
             )}
           </div>
