@@ -3,19 +3,21 @@ import { connectLambda, getStore, type Store } from '@netlify/blobs';
 // Netlify Blobs는 일반(동기) Handler 함수에서는 siteID/token이 자동으로 주입되지만,
 // Background Function은 별도의 비동기 Lambda invoke 경로를 타서 이 자동 주입이 되지 않아
 // "MissingBlobsEnvironmentError"가 발생하는 사례가 실사용 중 확인됐다(TTS 생성 502).
-// connectLambda(event)로 한 차례 고쳤지만 재배포 후에도 동일 에러가 재현됨 — event.blobs
-// 필드 자체가 Background Function 호출에는 실려오지 않을 가능성이 있어(Netlify 플랫폼
-// 쪽 동작이라 코드로 직접 확인 불가), 다음 배포에서 실제 event 형태를 로그로 남겨
-// 원인을 확정할 수 있도록 진단 로그를 추가했다.
+// connectLambda(event)로 한 차례 고쳤지만 재배포 후에도 동일 에러가 재현되어, 결국
+// NETLIFY_BLOBS_TOKEN 환경변수 수동 등록(아래 getJobStore의 폴백 경로)으로 해결됨이
+// 실사용으로 확인됐다(CLAUDE.md "Netlify Blobs 모듈" 절 참고). connectLambda 자체는
+// event.blobs가 있는 경우를 위해 계속 시도해둔다.
 export function connectBlobsForBackgroundFunction(event: unknown): void {
   const record = event as Record<string, unknown> | null | undefined;
   const blobs = record?.blobs;
 
-  console.log(
-    `[netlifyBlobsStore] event.blobs 존재 여부=${typeof blobs === 'string' && blobs.length > 0} eventKeys=${
-      record ? Object.keys(record).join(',') : 'null'
-    }`,
-  );
+  // event.blobs 존재 여부 진단 로그는 원인 확정 후 제거함 — 비슷한 문제가 재발하면
+  // 아래 주석을 해제해 다시 확인할 수 있다.
+  // console.log(
+  //   `[netlifyBlobsStore] event.blobs 존재 여부=${typeof blobs === 'string' && blobs.length > 0} eventKeys=${
+  //     record ? Object.keys(record).join(',') : 'null'
+  //   }`,
+  // );
 
   if (typeof blobs !== 'string' || !blobs) return;
 
@@ -37,7 +39,9 @@ export function getJobStore(name: string): Store {
   const token = process.env.NETLIFY_BLOBS_TOKEN;
 
   if (siteID && token) {
-    console.log(`[netlifyBlobsStore] SITE_ID+NETLIFY_BLOBS_TOKEN으로 수동 설정된 스토어 사용: ${name}`);
+    // 매 호출마다 찍히는 로그라 정상 운영 상태(NETLIFY_BLOBS_TOKEN 등록 확인됨)에서는
+    // 불필요한 노이즈 — 필요시 주석 해제.
+    // console.log(`[netlifyBlobsStore] SITE_ID+NETLIFY_BLOBS_TOKEN으로 수동 설정된 스토어 사용: ${name}`);
     return getStore({ name, siteID, token });
   }
 

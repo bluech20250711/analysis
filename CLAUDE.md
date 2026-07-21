@@ -100,17 +100,35 @@ Phase 8은 사용자가 실제 Netlify 계정으로 진행 중이며, 실사용 
 - ✅ **TTS 클립 생성(Blobs) — `NETLIFY_BLOBS_TOKEN` 수동 등록 후 `MissingBlobsEnvironmentError` 해결 확인됨**: 사용자가 Netlify 대시보드에서 Personal Access Token을 발급해 사이트 환경변수로 등록한 뒤 재배포 → 이 에러는 재현되지 않음(사용자 실테스트로 확인). `connectLambda`만으로는 부족했고 결국 수동 토큰 등록이 필요했던 것으로 보인다
 - ✅ **오디오 병합 요청(payload 크기) — 실제 배포에서 500 없이 통과 확인됨**: 클립을 id로만 참조하는 경량 스펙(`MergeSegmentSpec`)으로 바꾸고 실제 오디오는 서버가 Netlify Blobs에서 직접 읽어오도록 구조를 변경한 뒤, `Internal Error` 없이 병합 요청이 정상 처리됨(사용자 실테스트로 확인). 아래 "오디오 병합 모듈" 절의 "병합 요청이 HTTP 500으로 거부됨" 참고
 - ✅ **오디오 병합 내부(ffmpeg) — `external_node_modules` 설정 후 실제 배포에서 성공 확인됨**: `ffmpeg-static`이 배포 환경에서 실행 파일 경로를 못 찾던 문제(바이너리를 `node_modules/ffmpeg-static/`에 설치하고 `__dirname` 기준 상대 경로로 위치를 계산하는데, esbuild가 인라인 번들링하면서 깨짐)를 `netlify.toml`의 `external_node_modules = ["ffmpeg-static"]`로 해결 — ffmpeg 병합 자체가 끝까지 성공함(사용자 실테스트로 확인)
-- 🔧 **오디오 병합 결과 반환 — 신규 "Function.ResponseSizeTooLarge" 발견 → 수정, 재검증 필요**: ffmpeg 병합은 성공했지만, `get-merged-audio`가 완성된 mp3를 base64로 인코딩해 응답 본문에 통째로 담아 반환하다 Netlify Functions의 동기 응답 페이로드 한도(약 6MB, AWS Lambda 동기 invoke 응답 한도를 그대로 물려받음)를 넘겨 실패. `@netlify/functions`의 `stream()` 래퍼로 핸들러를 감싸 응답을 스트리밍하도록 수정(Netlify 공식 문서가 이 에러의 권장 해법으로 명시하는 방식) — Netlify Blobs도 `type: 'stream'`으로 읽어와 서버 쪽에서도 mp3 전체를 메모리에 한 번에 올리지 않는다. 프론트엔드는 이미 `response.blob()`으로 받고 있어 수정 불필요. 아래 "오디오 병합 모듈" 절의 "결과를 돌려주는 과정에서 Function.ResponseSizeTooLarge" 참고. **`stream()`이 쓰는 AWS Lambda Response Streaming은 실제 Lambda 런타임 전용 전역 객체라 로컬 재현이 원천적으로 불가능했음 — 실제 Netlify 배포에서 재검증 필요**
-- 🔧 **PDF 생성 — 신규 502(`React is not defined`) 발견 → 수정, 재검증 필요**: HWPX가 성공하면서 처음 도달한 PDF 단계에서 새로운 에러 발견. Netlify의 함수 번들러(esbuild)가 `src/lib/pdf/**/*.tsx`의 JSX를 `tsconfig.app.json`의 `jsx: "react-jsx"`(자동 런타임) 대신, jsx 설정이 없는 루트 `tsconfig.json`을 집어 classic 변환(`React.createElement(...)`)으로 처리해 `React` 식별자가 정의되지 않은 채 남아있었다(PDF 렌더러 모듈 절의 "tsx CLI가 루트 tsconfig.json을 잘못 집는" 이슈와 동일한 근본 원인이 프로덕션 번들러에서도 재현된 것). `buildPdf.tsx`와 `pdf/components/*.tsx` 6개 파일 전부에 `import React from 'react';`를 명시적으로 추가해 어느 쪽 변환이 적용되어도 깨지지 않도록 수정. 아래 "PDF 렌더러 모듈" 절 참고. esbuild로 classic 변환을 직접 재현해 수정 전 크래시 조건과 수정 후 정상 동작을 로컬에서 확인함. **실제 Netlify 배포에서 재검증 필요**
+- ✅ **오디오 병합 결과 반환 — 실제 배포에서 성공 확인됨**: `get-merged-audio`가 완성된 mp3를 base64로 인코딩해 응답 본문에 통째로 담아 반환하다 Netlify Functions의 동기 응답 페이로드 한도(약 6MB)를 넘겨 `Function.ResponseSizeTooLarge`로 실패하던 문제. `@netlify/functions`의 `stream()` 래퍼로 응답을 스트리밍하도록 수정한 뒤 브라우저 Network 탭에서 상태 200, 약 11MB 전체 다운로드 성공 확인(사용자 실테스트로 확인, 3.32초 소요). **이로써 Gemini 문항 생성 → TTS 클립 생성 → 오디오 병합 → 최종 mp3 다운로드까지 오디오 파이프라인 전체가 실제 배포 환경에서 엔드투엔드로 성공함이 확인됐다.** 아래 "오디오 병합 모듈" 절의 "결과를 돌려주는 과정에서 Function.ResponseSizeTooLarge" 참고
+- 🔧 **PDF 생성 — 신규 502(`React is not defined`) 발견 → 수정, 재검증 필요**: HWPX가 성공하면서 처음 도달한 PDF 단계에서 새로운 에러 발견. Netlify의 함수 번들러(esbuild)가 `src/lib/pdf/**/*.tsx`의 JSX를 `tsconfig.app.json`의 `jsx: "react-jsx"`(자동 런타임) 대신, jsx 설정이 없는 루트 `tsconfig.json`을 집어 classic 변환(`React.createElement(...)`)으로 처리해 `React` 식별자가 정의되지 않은 채 남아있었다(PDF 렌더러 모듈 절의 "tsx CLI가 루트 tsconfig.json을 잘못 집는" 이슈와 동일한 근본 원인이 프로덕션 번들러에서도 재현된 것). `buildPdf.tsx`와 `pdf/components/*.tsx` 6개 파일 전부에 `import React from 'react';`를 명시적으로 추가해 어느 쪽 변환이 적용되어도 깨지지 않도록 수정. 아래 "PDF 렌더러 모듈" 절 참고. esbuild로 classic 변환을 직접 재현해 수정 전 크래시 조건과 수정 후 정상 동작을 로컬에서 확인함. **실제 Netlify 배포에서 재검증 필요 — 아직 사용자가 테스트하지 않음**
+
+### Phase 8 트러블슈팅 히스토리 (요약 — 각 항목의 자세한 원인·수정은 해당 모듈 절 참고)
+
+실사용 배포·테스트 중 발견되어 이 세션들에서 순서대로 고친 문제들. 유사한 증상이 재발하면 아래에서 먼저 찾아보고, 해당 모듈 절의 상세 내용으로 이동한다.
+
+| # | 증상 | 근본 원인 | 수정 | 상태 |
+|---|---|---|---|---|
+| 1 | Gemini 호출 실패(모델 폐기) | `gemini-2.5-pro` 종료 | `GEMINI_MODEL` 상수를 `geminiConfig.ts` 한 곳으로 통합, `gemini-3.1-pro-preview`로 교체 | ✅ |
+| 2 | Netlify 빌드 실패(TS2578) | 조건 없이 남아있던 stale `@ts-expect-error` | 불필요해진 지시어 제거 | ✅ |
+| 3 | HWPX/PDF 502 `ENOENT` | `templates/`가 함수 배포 패키지에 자동 포함 안 됨 | `netlify.toml`에 `included_files` 추가 | ✅ (아래 4번으로 근본 해결) |
+| 4 | HWPX 502 `ENOENT` 재발 | `included_files`만으로는 부족, 경로 탐색 로직 자체가 배포 환경과 안 맞음 | `resolveTemplateDir.ts` 다중 후보 경로 탐색 도입 | ✅ |
+| 5 | Gemini 검증 실패(`too_big`, pairChoices) | 40번 전용 필드 검증이 다른 문항까지 적용되도록 잘못 설계됨 | `number === 40`일 때만 게이팅, 원본 응답 로깅 추가 | ✅ |
+| 6 | TTS 생성 504 Timeout | 동기 함수가 문항 수만큼 순차 TTS 호출 처리하다 10초 제한 초과 | Background Function(`generate-audio-background`) + 폴링으로 전환 | ✅ |
+| 7 | TTS 502 `MissingBlobsEnvironmentError` | Background Function엔 Netlify Blobs 컨텍스트가 자동 주입 안 됨(플랫폼 한계) | `connectLambda` 시도 + 최종적으로 `NETLIFY_BLOBS_TOKEN` 수동 등록 | ✅ |
+| 8 | HWPX/PDF 502 `fileURLToPath ... Received undefined` | esbuild가 함수를 CJS로 번들링하며 `import.meta.url`을 빈 객체로 치환 | `resolveTemplateDir.ts`가 `import.meta.url` 실패 시 `process.cwd()`/`LAMBDA_TASK_ROOT`로 폴백 | ✅ |
+| 9 | PDF 502 `React is not defined` | esbuild가 jsx 설정 없는 루트 `tsconfig.json`을 집어 JSX를 classic 변환 | `pdf/**/*.tsx` 6개 파일에 `import React from 'react'` 명시 추가 | 🔧 재검증 필요 |
+| 10 | 오디오 병합 500 `Internal Error` | 병합 요청 본문에 오디오 전체를 base64로 실어 보내 AWS Lambda 비동기 invoke 페이로드 한도 초과 | `MergeSegmentSpec`(클립 id만 참조)로 경량화, 서버가 Blobs에서 직접 클립 조회 | ✅ |
+| 11 | 병합 내부 "ffmpeg 바이너리 경로를 찾을 수 없습니다" | esbuild가 `ffmpeg-static`을 인라인 번들링하며 `__dirname` 기준 바이너리 위치가 깨짐 | `netlify.toml`에 `external_node_modules = ["ffmpeg-static"]` 추가 | ✅ |
+| 12 | 병합 결과 응답 `Function.ResponseSizeTooLarge` | 완성된 mp3를 base64로 응답 본문에 통째로 반환하다 Lambda 동기 응답 6MB 한도 초과 | `get-merged-audio.ts`를 `stream()`으로 감싸 응답 스트리밍 | ✅ |
+| — | (버그는 아님) 디버깅 중 Gemini API 반복 호출 낭비 | 뒷단계 실패 시에도 매번 Gemini부터 재실행 | `examSetStorage.ts`(localStorage 캐싱) + 단계별 "○○만 다시 생성" 재시도 버튼 도입 | ✅ |
 
 ### Phase 8 다음 확인 체크리스트
 
-1. **오디오 병합 결과 반환 재테스트**: `stream()` 래퍼 적용 후 "음성만 다시 생성" 버튼으로 최종 mp3가 `Function.ResponseSizeTooLarge` 없이 실제로 다운로드되는지 확인
-2. **PDF 재테스트**: `React is not defined` 수정 후 실제로 PDF가 502 없이 생성되는지 확인
-3. **엔드투엔드 전체 성공 확인**: Gemini → TTS(폴링) → 병합(폴링) → HWPX/PDF 다운로드까지 브라우저에서 한 번 끝까지 성공하는 것 확인
-4. **HWPX/PDF 결과물 육안 확인**: 실제 생성된 hwpx를 한글에서, pdf를 뷰어에서 열어 CLI로 검증한 내용(줄바꿈, 2단 배분, 각주, 이미지 placeholder 등)이 동일하게 보이는지
-5. **HWPX 출력 파일명 ASCII 확인**: 다운로드 파일명이 한글 파일명 깨짐 없이 내려가는지(설계스펙 6절)
-6. **문항 재사용 플로우 확인**: 페이지를 새로고침해도 마지막 생성된 문항이 유지되고, "○○만 다시 생성" 버튼으로 Gemini 재호출 없이 TTS/HWPX/PDF 각각을 재시도할 수 있는지(아래 "프론트엔드 통합 모듈" 절의 "문항 캐싱 + 단계별 재시도" 참고)
+1. **PDF 재테스트**: `React is not defined` 수정 후 실제로 PDF가 502 없이 생성되는지 확인(오디오 파이프라인은 위에서 엔드투엔드 확인 완료)
+2. **HWPX/PDF 결과물 육안 확인**: 실제 생성된 hwpx를 한글에서, pdf를 뷰어에서 열어 CLI로 검증한 내용(줄바꿈, 2단 배분, 각주, 이미지 placeholder 등)이 동일하게 보이는지
+3. **HWPX 출력 파일명 ASCII 확인**: 다운로드 파일명이 한글 파일명 깨짐 없이 내려가는지(설계스펙 6절)
+4. **듣기 MP3 실제 청취 검증**: 신호음/대사/정적구간 흐름이 실제로 자연스러운지, 화자별 음성이 올바르게 매칭되는지(사용자가 직접 다운로드해 청취 확인 중)
 
 ## 환경변수
 
