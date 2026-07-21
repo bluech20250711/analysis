@@ -1,3 +1,9 @@
+// Netlify Functions 배포 환경(esbuild)이 이 파일에 react-jsx 자동 런타임 대신 classic
+// JSX 변환(React.createElement)을 적용하는 경우가 있어(esbuild가 tsconfig.app.json이 아닌
+// jsx 설정이 없는 루트 tsconfig.json을 집어 발생 — "React is not defined" 502로 확인),
+// 어느 쪽으로 변환되어도 깨지지 않도록 React를 명시적으로 import한다.
+import React from 'react';
+void React; // react-jsx 자동 런타임에서는 JSX가 React를 직접 참조하지 않아 tsc가 미사용으로 보는 것을 방지
 import { Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 import type { ExamSet } from '../../types';
 import { circledNumber } from '../blocks';
