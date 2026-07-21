@@ -2,11 +2,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { buildListeningMergePlan, buildTtsLineId } from '../src/lib/audio/buildMergePlan';
+import { buildListeningMergePlan, buildTtsLineId, resolveMergeSegments } from '../src/lib/audio/buildMergePlan';
 import { mergeSegmentsToMp3 } from '../src/lib/audio/ffmpegMerge';
 import { PAIR_1617_GAP_SECONDS, SIGNAL_TONE_SECONDS, STANDARD_GAP_SECONDS, INTRO_TO_FIRST_ITEM_GAP_SECONDS } from '../src/lib/audio/timing';
 import type { ListeningItem } from '../src/lib/types';
-import type { MergeSegment } from '../src/lib/audio/types';
+import type { MergeSegmentSpec } from '../src/lib/audio/types';
 
 // Phase 5 PoC: 실제 Google Cloud TTS 키 없이도 병합 메커니즘(신호음/정적구간/최종 mp3 조립)을
 // 검증하기 위해, 대사 클립을 진짜 TTS 대신 문항마다 다른 주파수의 짧은 사인파로 대체한다.
@@ -112,7 +112,7 @@ async function main() {
     }
   }
 
-  const segments: MergeSegment[] = buildListeningMergePlan({
+  const segments: MergeSegmentSpec[] = buildListeningMergePlan({
     listening: testListening,
     clipsById,
     introClipId: 'intro',
@@ -129,7 +129,10 @@ async function main() {
     `[test-merge-audio] 상수 확인: 신호음=${SIGNAL_TONE_SECONDS}s, 표준 정적=${STANDARD_GAP_SECONDS}s, 16-17번 이후 정적=${PAIR_1617_GAP_SECONDS}s, 인트로 뒤 정적=${INTRO_TO_FIRST_ITEM_GAP_SECONDS}s`,
   );
 
-  const buffer = await mergeSegmentsToMp3(segments, FFMPEG_PATH);
+  // 실제 merge-audio-background.ts와 동일하게, 경량 스펙(클립 id만 참조)을 병합 직전에
+  // clipsById로 실제 오디오 바이트로 해석(resolve)한 뒤 ffmpeg에 넘긴다.
+  const resolvedSegments = resolveMergeSegments(segments, clipsById);
+  const buffer = await mergeSegmentsToMp3(resolvedSegments, FFMPEG_PATH);
   await writeFile(outPath, buffer);
   console.log(`✅ 병합 완료: ${outPath} (${buffer.length} bytes)`);
 

@@ -1,5 +1,5 @@
 import type { TtsLineRequest, TtsLineResult } from './tts/types';
-import type { MergeSegment } from './audio/types';
+import type { MergeSegmentSpec } from './audio/types';
 import type { ExamSet, ListeningItem, ReadingItem } from './types';
 
 // 브라우저에서 Netlify Functions를 호출하는 얇은 fetch 래퍼 모음.
@@ -71,11 +71,16 @@ export async function pollAudioClipsUntilDone(
   throw new Error('TTS 생성이 제한 시간 내에 끝나지 않았습니다.');
 }
 
-export async function startAudioMerge(jobId: string, segments: MergeSegment[]): Promise<void> {
+// segments는 클립 id만 참조하는 경량 스펙(MergeSegmentSpec)이다 — 실제 오디오 바이트는
+// clipsJobId로 서버(merge-audio-background)가 Netlify Blobs에서 직접 읽어온다. 예전에는
+// segments에 오디오 base64를 통째로 실어 보냈는데, 듣기 전체 분량이면 AWS Lambda 비동기
+// invoke 페이로드 한도를 넘겨 HTTP 500 "Internal Error"로 거부당하는 문제가 있었다(실사용
+// 중 발견 — audio/types.ts 주석 참고).
+export async function startAudioMerge(jobId: string, clipsJobId: string, segments: MergeSegmentSpec[]): Promise<void> {
   const response = await fetch('/.netlify/functions/merge-audio-background', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jobId, segments }),
+    body: JSON.stringify({ jobId, clipsJobId, segments }),
   });
   if (!response.ok) throw new Error(await readErrorMessage(response, '오디오 병합 요청에 실패했습니다.'));
 }

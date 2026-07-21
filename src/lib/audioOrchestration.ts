@@ -49,6 +49,6 @@ export async function synthesizeListeningAudio(ttsApiKey: string, listening: Lis
   });
 
   const mergeJobId = crypto.randomUUID();
-  await startAudioMerge(mergeJobId, segments);
+  await startAudioMerge(mergeJobId, clipsJobId, segments);
   return pollMergedAudioUntilDone(mergeJobId);
 }

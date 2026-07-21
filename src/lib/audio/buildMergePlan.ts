@@ -1,5 +1,5 @@
 import type { ListeningItem } from '../types';
-import type { MergeSegment } from './types';
+import type { MergeSegment, MergeSegmentSpec } from './types';
 import { SIGNAL_TONE_SECONDS, INTRO_TO_FIRST_ITEM_GAP_SECONDS, gapSecondsAfter } from './timing';
 
 // TtsLineRequest/TtsLineResult의 id 포맷(tts/types.ts 참고: "1-0" = 1번 문항의 0번째 대사)을
@@ -10,25 +10,26 @@ export function buildTtsLineId(itemNumber: number, lineIndex: number): string {
 
 export interface MergePlanInput {
   listening: ListeningItem[];
-  clipsById: Map<string, string>; // TtsLineResult.id -> audioBase64 (대사 클립 + 안내멘트 클립 포함)
+  clipsById: Map<string, string>; // TtsLineResult.id -> audioBase64 (대사 클립 + 안내멘트 클립 포함) — 존재 검증용
   introClipId?: string; // 듣기 시작 안내멘트 클립 id (clipsById에 있어야 함)
   outroClipId?: string; // 듣기 종료 안내멘트 클립 id
 }
 
-function clipSegment(clipsById: Map<string, string>, id: string): MergeSegment {
-  const audioBase64 = clipsById.get(id);
-  if (!audioBase64) throw new Error(`병합 플랜: 클립을 찾을 수 없습니다 (id=${id})`);
-  return { kind: 'clip', audioBase64 };
+function clipSegmentSpec(clipsById: Map<string, string>, id: string): MergeSegmentSpec {
+  if (!clipsById.has(id)) throw new Error(`병합 플랜: 클립을 찾을 수 없습니다 (id=${id})`);
+  return { kind: 'clip', clipId: id };
 }
 
-// 듣기 1~17번 전체를 하나의 MP3로 합치기 위한 순서(MergeSegment[])를 만든다.
-// 실제 ffmpeg 실행(mergeSegmentsToMp3)과는 분리되어 있어 파일 I/O 없이 순수하게 테스트 가능하다.
-export function buildListeningMergePlan(input: MergePlanInput): MergeSegment[] {
-  const segments: MergeSegment[] = [];
+// 듣기 1~17번 전체를 하나의 MP3로 합치기 위한 순서(MergeSegmentSpec[])를 만든다.
+// 실제 오디오 바이트는 담지 않고 클립 id만 참조하는 경량 스펙이다 — 브라우저에서 서버로
+// 전송해도 페이로드 크기 문제가 없다(위 types.ts 주석 참고). 실제 ffmpeg 실행
+// (mergeSegmentsToMp3)과는 완전히 분리되어 있어 파일 I/O 없이 순수하게 테스트 가능하다.
+export function buildListeningMergePlan(input: MergePlanInput): MergeSegmentSpec[] {
+  const segments: MergeSegmentSpec[] = [];
   const sorted = [...input.listening].sort((a, b) => a.number - b.number);
 
   if (input.introClipId) {
-    segments.push(clipSegment(input.clipsById, input.introClipId));
+    segments.push(clipSegmentSpec(input.clipsById, input.introClipId));
     segments.push({ kind: 'silence', seconds: INTRO_TO_FIRST_ITEM_GAP_SECONDS });
   }
 
@@ -39,14 +40,26 @@ export function buildListeningMergePlan(input: MergePlanInput): MergeSegment[] {
 
     segments.push({ kind: 'tone', seconds: SIGNAL_TONE_SECONDS });
     item.script.forEach((_, lineIndex) => {
-      segments.push(clipSegment(input.clipsById, buildTtsLineId(item.number, lineIndex)));
+      segments.push(clipSegmentSpec(input.clipsById, buildTtsLineId(item.number, lineIndex)));
     });
     segments.push({ kind: 'silence', seconds: gapSecondsAfter(item) });
   }
 
   if (input.outroClipId) {
-    segments.push(clipSegment(input.clipsById, input.outroClipId));
+    segments.push(clipSegmentSpec(input.clipsById, input.outroClipId));
   }
 
   return segments;
+}
+
+// MergeSegmentSpec[](클립 id만 참조하는 경량 스펙)을 실제 오디오 바이트가 채워진
+// MergeSegment[]로 변환한다. merge-audio-background.ts가 Netlify Blobs에서 클립 데이터를
+// 직접 읽어온 뒤(clipsById) 이 함수로 병합 직전에 해석(resolve)한다.
+export function resolveMergeSegments(specs: MergeSegmentSpec[], clipsById: Map<string, string>): MergeSegment[] {
+  return specs.map((spec) => {
+    if (spec.kind !== 'clip') return spec;
+    const audioBase64 = clipsById.get(spec.clipId);
+    if (!audioBase64) throw new Error(`병합: 클립을 찾을 수 없습니다 (id=${spec.clipId})`);
+    return { kind: 'clip', audioBase64 };
+  });
 }
