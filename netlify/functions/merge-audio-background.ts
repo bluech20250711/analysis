@@ -39,12 +39,13 @@ interface RequestBody {
 // 있다(실사용 중 "ffmpeg 바이너리 경로를 찾을 수 없습니다" 에러로 발견 — npm install 자체는
 // Netlify 빌드 로그에서 성공이 확인됐는데도 함수 실행 시점에는 못 찾는 증상과 일치). netlify.toml의
 // [functions."merge-audio-background"].external_node_modules로 node_modules/ffmpeg-static
-// 폴더 전체(JS + 바이너리)를 번들링 없이 원본 그대로 복사하도록 지정해 근본 원인을 없앴다.
-// 여기서는 그래도 문제가 재현될 경우를 대비해 실제로 파일이 존재하는지까지 확인하고, 다음
-// 배포 로그에서 바로 원인을 알 수 있도록 각 단계를 진단 로그로 남긴다.
+// 폴더 전체(JS + 바이너리)를 번들링 없이 원본 그대로 복사하도록 지정해 근본 원인을 없앴고,
+// 실제 배포에서 ffmpeg 병합이 끝까지 성공함을 확인했다(CLAUDE.md "오디오 병합 모듈" 절 참고).
+// 아래 console.warn(실패 시)은 남겨두되, 정상 경로의 console.log(성공 시 경로 확인용)는
+// 문제 해결 후 노이즈만 남아 주석 처리함 — 비슷한 문제가 재발하면 주석을 해제해 다시 확인할 수 있다.
 function resolveFfmpegPath(): string | null {
   const anchor = path.join(process.cwd(), 'index.js');
-  console.log(`[merge-audio-background] resolveFfmpegPath anchor=${anchor}`);
+  // console.log(`[merge-audio-background] resolveFfmpegPath anchor=${anchor}`);
 
   let ffmpegPath: unknown;
   try {
@@ -64,7 +65,7 @@ function resolveFfmpegPath(): string | null {
   }
 
   const exists = existsSync(ffmpegPath);
-  console.log(`[merge-audio-background] ffmpegPath=${ffmpegPath} exists=${exists}`);
+  // console.log(`[merge-audio-background] ffmpegPath=${ffmpegPath} exists=${exists}`);
   if (!exists) return null;
 
   return ffmpegPath;
