@@ -14,6 +14,17 @@
 [functions."export-pdf"]
   included_files = ["templates/pdf-template/**"]
 
+# ffmpeg-static은 실행 파일(바이너리)을 npm install 시점에 node_modules/ffmpeg-static/
+# 폴더 안(index.js 바로 옆)에 직접 내려받는다(ffmpeg-static/index.js가 path.join(__dirname,
+# 'ffmpeg')로 그 위치를 계산). esbuild가 이 패키지를 다른 코드처럼 인라인/번들링하려고 하면
+# __dirname 기준 상대 위치가 깨지거나 바이너리 자체가 배포 패키지에서 통째로 누락될 수 있다
+# (실제로 "ffmpeg 바이너리 경로를 찾을 수 없습니다" 에러로 발견 — npm install 자체는
+# 성공했는데도 함수 실행 시점에는 못 찾는 증상과 일치). external_node_modules로 지정하면
+# 번들링/트리쉐이킹 없이 node_modules/ffmpeg-static 폴더 전체(JS + 바이너리)를 원본 그대로
+# 배포 패키지에 복사해 이 문제를 근본적으로 없앤다.
+[functions."merge-audio-background"]
+  external_node_modules = ["ffmpeg-static"]
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

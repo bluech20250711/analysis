@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { BackgroundHandler } from '@netlify/functions';
@@ -30,13 +31,43 @@ interface RequestBody {
 // fileURLToPath류 API에 넘기면 "path 인자가 string/URL이어야 한다"는 TypeError가 발생한다
 // (실사용 중 HWPX와 동일한 원인으로 발견). import.meta.url 대신 실제 파일 존재 여부와
 // 무관하게 디렉터리 앵커로만 쓰이는 process.cwd() 기반 경로를 사용해 이 문제를 피한다.
+//
+// ⚠️ ffmpeg-static/index.js는 실행 파일 경로를 path.join(__dirname, 'ffmpeg')로 계산하고,
+// install.js가 npm install 시점에 실제 바이너리를 정확히 그 자리(node_modules/ffmpeg-static/
+// 폴더 안, index.js 바로 옆)에 내려받는다. esbuild가 이 패키지를 다른 코드처럼 인라인
+// 번들링하면 __dirname 기준 상대 위치가 깨지거나 바이너리 자체가 배포 패키지에서 누락될 수
+// 있다(실사용 중 "ffmpeg 바이너리 경로를 찾을 수 없습니다" 에러로 발견 — npm install 자체는
+// Netlify 빌드 로그에서 성공이 확인됐는데도 함수 실행 시점에는 못 찾는 증상과 일치). netlify.toml의
+// [functions."merge-audio-background"].external_node_modules로 node_modules/ffmpeg-static
+// 폴더 전체(JS + 바이너리)를 번들링 없이 원본 그대로 복사하도록 지정해 근본 원인을 없앴다.
+// 여기서는 그래도 문제가 재현될 경우를 대비해 실제로 파일이 존재하는지까지 확인하고, 다음
+// 배포 로그에서 바로 원인을 알 수 있도록 각 단계를 진단 로그로 남긴다.
 function resolveFfmpegPath(): string | null {
+  const anchor = path.join(process.cwd(), 'index.js');
+  console.log(`[merge-audio-background] resolveFfmpegPath anchor=${anchor}`);
+
+  let ffmpegPath: unknown;
   try {
-    const require = createRequire(path.join(process.cwd(), 'index.js'));
-    return require('ffmpeg-static') as string | null;
-  } catch {
+    const require = createRequire(anchor);
+    ffmpegPath = require('ffmpeg-static');
+  } catch (err) {
+    console.warn(
+      `[merge-audio-background] require('ffmpeg-static') 실패:`,
+      err instanceof Error ? err.message : err,
+    );
     return null;
   }
+
+  if (typeof ffmpegPath !== 'string' || !ffmpegPath) {
+    console.warn(`[merge-audio-background] ffmpeg-static이 유효한 경로를 반환하지 않음:`, ffmpegPath);
+    return null;
+  }
+
+  const exists = existsSync(ffmpegPath);
+  console.log(`[merge-audio-background] ffmpegPath=${ffmpegPath} exists=${exists}`);
+  if (!exists) return null;
+
+  return ffmpegPath;
 }
 
 export const handler: BackgroundHandler = async (event) => {
