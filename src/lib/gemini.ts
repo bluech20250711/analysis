@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { z } from 'zod';
-import type { ExamOptions, ListeningItem, ReadingItem } from './types';
+import type { Choice, ExamOptions, ListeningItem, ReadingItem } from './types';
 import { buildListeningSystemPrompt } from './prompts/listeningPrompt';
 import { buildReadingSystemPrompt } from './prompts/readingPrompt';
 import { GEMINI_MODEL } from './geminiConfig';
@@ -20,6 +20,8 @@ const choiceSchema: Schema = {
   properties: {
     number: { type: Type.INTEGER },
     text: { type: Type.STRING },
+    // 카드뷰 "■ 선택지해석" 전용 — 이 선택지의 한국어 해석 + 정답/오답 판단 이유 한 줄.
+    interpretation: { type: Type.STRING, nullable: true },
   },
   required: ['number', 'text'],
 };
@@ -126,7 +128,11 @@ const readingResponseSchema: Schema = {
   required: ['items'],
 };
 
-const choiceZod = z.object({ number: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]), text: z.string() });
+const choiceZod = z.object({
+  number: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+  text: z.string(),
+  interpretation: z.string().nullable().optional(),
+});
 
 const listeningItemZod = z
   .object({
@@ -217,6 +223,12 @@ async function callGeminiJson<T>(
 
 const SUMMARY_ITEM_NUMBER = 40; // 요약문 완성(pairChoices 사용) 문항 번호 — 이 번호가 아니면 pairChoices는 무시한다.
 
+// Zod는 interpretation을 (Gemini의 nullable 스키마에 맞춰) string | null | undefined로
+// 받지만 Choice 타입은 string | undefined만 허용 — null을 undefined로 맞춘다.
+function normalizeChoices(choices: z.infer<typeof choiceZod>[]): Choice[] {
+  return choices.map((c) => ({ ...c, interpretation: c.interpretation ?? undefined }));
+}
+
 function normalizeReadingItem(raw: z.infer<typeof readingItemRawZod>): ReadingItem {
   let choices: ReadingItem['choices'];
 
@@ -232,10 +244,10 @@ function normalizeReadingItem(raw: z.infer<typeof readingItemRawZod>): ReadingIt
         `${SUMMARY_ITEM_NUMBER}번 문항의 pairChoices가 올바르지 않습니다 (받은 그룹 수: ${groups.length}).`,
       );
     }
-    choices = { pairChoices: [groups[0], groups[1]] };
+    choices = { pairChoices: [normalizeChoices(groups[0]), normalizeChoices(groups[1])] };
   } else {
     // 40번이 아닌 문항은 pairChoices를 절대 쓰지 않는다 — Gemini가 실수로 값을 채워도 무시.
-    choices = raw.choices ?? [];
+    choices = normalizeChoices(raw.choices ?? []);
   }
 
   return {
