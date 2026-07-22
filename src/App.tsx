@@ -5,6 +5,7 @@ import ExamOptionsForm from './components/ExamOptionsForm';
 import GenerationProgress, { type ProgressStep } from './components/GenerationProgress';
 import ItemGenerationStatus from './components/ItemGenerationStatus';
 import DownloadPanel from './components/DownloadPanel';
+import ExamItemCard from './components/ExamItemCard';
 import ListeningAudioPanel from './components/ListeningAudioPanel';
 import TypeSelectionPanel from './components/TypeSelectionPanel';
 import { getGeminiApiKey, getTtsApiKey, hasGeminiApiKey } from './lib/apiKeyStorage';
@@ -374,6 +375,14 @@ function App() {
     }
   };
 
+  // 카드뷰(ExamItemCard)의 "AI 음성 생성" 버튼 — 기존 문항별 개별 생성 로직
+  // (generateListeningClips)을 그대로 재사용해 클릭한 문항 하나만 생성한다.
+  const handleGenerateOneClip = (itemKey: string) => {
+    const unit = listeningClipUnits.find((u) => u.itemKey === itemKey);
+    if (!unit || !audioSessionId || !ttsApiKey) return;
+    void runClipGeneration(audioSessionId, ttsApiKey, [unit]);
+  };
+
   // 17개 문항(+인트로/아웃트로) 전부 성공했을 때만 ListeningAudioPanel에서 활성화되는 버튼.
   const handleMergeAudio = async () => {
     if (!audioSessionId || !examSet) return;
@@ -474,13 +483,35 @@ function App() {
                       생성 완료 — 듣기 {examSet.listening.length}문항 / 독해 {examSet.reading.length}문항
                     </p>
                     <details className="text-sm">
-                      <summary className="cursor-pointer text-blue-600">전체 JSON 보기</summary>
+                      <summary className="cursor-pointer text-blue-600">개발자용 JSON 보기</summary>
                       <pre className="text-xs bg-gray-50 rounded-lg p-3 overflow-auto max-h-96 whitespace-pre-wrap mt-2">
                         {JSON.stringify(examSet, null, 2)}
                       </pre>
                     </details>
                   </div>
                 )}
+
+                {/* 참고 앱("AI 유형" 결과 화면)과 동일한 카드뷰 — "1세트"/"유형별" 어느 경로로
+                    생성했든 examSet의 모든 문항을 이 형태로 보여준다. */}
+                {examSet &&
+                  [...examSet.listening, ...examSet.reading]
+                    .sort((a, b) => a.number - b.number)
+                    .map((item) => {
+                      const itemKey = String(item.number);
+                      const clipUnit = listeningClipUnits.find((u) => u.itemKey === itemKey);
+                      return (
+                        <ExamItemCard
+                          key={item.number}
+                          item={item}
+                          clipStatus={clipUnit ? clipStatusMap[itemKey]?.status ?? 'pending' : undefined}
+                          clipMessage={clipStatusMap[itemKey]?.message}
+                          onGenerateAudio={
+                            clipUnit && ttsApiKey ? () => handleGenerateOneClip(itemKey) : undefined
+                          }
+                          audioBusy={clipGenerating}
+                        />
+                      );
+                    })}
 
                 {examSet && examSet.listening.length > 0 && !ttsApiKey && (
                   <p className="text-sm text-gray-500">

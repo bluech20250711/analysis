@@ -4,6 +4,9 @@
 export interface Choice {
   number: 1 | 2 | 3 | 4 | 5;
   text: string;
+  // 선택지 카드뷰(참고: "AI 유형" 결과 화면)의 "■ 선택지해석" 전용 — 선택지의 한국어
+  // 해석 + 정답/오답 판단 이유 한 줄. 기존에 캐시된 문항에는 없을 수 있어 optional.
+  interpretation?: string;
 }
 
 export type Speaker = 'M' | 'W' | 'Narrator';
