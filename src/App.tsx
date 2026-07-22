@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import ApiKeySettings from './components/ApiKeySettings';
+import ExamModeCards, { type ExamMode } from './components/ExamModeCards';
 import ExamOptionsForm from './components/ExamOptionsForm';
 import GenerationProgress, { type ProgressStep } from './components/GenerationProgress';
 import DownloadPanel from './components/DownloadPanel';
 import ListeningAudioPanel from './components/ListeningAudioPanel';
+import TypeSelectionPanel from './components/TypeSelectionPanel';
 import { getGeminiApiKey, getTtsApiKey, hasGeminiApiKey } from './lib/apiKeyStorage';
 import { generateExamSet, type GenerationStage } from './lib/gemini';
 import { requestHwpx, requestPdf, getListeningClipsStatus } from './lib/apiClient';
@@ -48,6 +50,8 @@ const steps = buildSteps();
 
 function App() {
   const [view, setView] = useState<View>(hasGeminiApiKey() ? 'main' : 'settings');
+  // 메인 화면 상단 3분기 카드(설계스펙 12절) — 카드를 고르기 전엔 아무 패널도 안 보인다.
+  const [activeMode, setActiveMode] = useState<ExamMode | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [stage, setStage] = useState<PipelineStage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -278,65 +282,73 @@ function App() {
             }}
           />
         ) : (
-          <div className="max-w-2xl mx-auto space-y-4">
-            <ExamOptionsForm
-              initialOptions={DEFAULT_OPTIONS}
-              onSubmit={handleGenerate}
-              disabled={loading || retryingStage !== null}
-            />
+          <div className="max-w-5xl mx-auto space-y-4">
+            <ExamModeCards activeMode={activeMode} onSelect={setActiveMode} />
 
-            {loading && <GenerationProgress steps={steps} currentKey={stage} />}
+            {activeMode === 'by-type' && <TypeSelectionPanel />}
 
-            {error && (
-              <div className="px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
-                {error}
+            {activeMode === 'full-set' && (
+              <div className="max-w-2xl mx-auto space-y-4">
+                <ExamOptionsForm
+                  initialOptions={DEFAULT_OPTIONS}
+                  onSubmit={handleGenerate}
+                  disabled={loading || retryingStage !== null}
+                />
+
+                {loading && <GenerationProgress steps={steps} currentKey={stage} />}
+
+                {error && (
+                  <div className="px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+                    {error}
+                  </div>
+                )}
+
+                {examSet && (
+                  <div className="bg-white rounded-xl shadow p-4 space-y-3">
+                    <p className="font-medium">
+                      생성 완료 — 듣기 {examSet.listening.length}문항 / 독해 {examSet.reading.length}문항
+                    </p>
+                    <details className="text-sm">
+                      <summary className="cursor-pointer text-blue-600">전체 JSON 보기</summary>
+                      <pre className="text-xs bg-gray-50 rounded-lg p-3 overflow-auto max-h-96 whitespace-pre-wrap mt-2">
+                        {JSON.stringify(examSet, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                )}
+
+                {examSet && !ttsApiKey && (
+                  <p className="text-sm text-gray-500">
+                    TTS API 키가 없어 듣기 MP3 생성을 건너뜁니다. (API 키 설정 화면에서 입력 가능)
+                  </p>
+                )}
+
+                {examSet && ttsApiKey && (
+                  <ListeningAudioPanel
+                    units={listeningClipUnits}
+                    statusMap={clipStatusMap}
+                    generating={clipGenerating}
+                    merging={audioMerging}
+                    mergeFailedReason={mergeFailedReason}
+                    onRetryFailed={handleRetryFailedClips}
+                    onMerge={handleMergeAudio}
+                  />
+                )}
+
+                {examSet && (
+                  <DownloadPanel
+                    examSet={examSet}
+                    hwpxBlob={hwpxBlob}
+                    pdfBlob={pdfBlob}
+                    audioBlob={audioBlob}
+                    hwpxFailedReason={hwpxFailedReason}
+                    pdfFailedReason={pdfFailedReason}
+                    retryingStage={retryingStage}
+                    onRetryHwpx={handleRetryHwpx}
+                    onRetryPdf={handleRetryPdf}
+                  />
+                )}
               </div>
-            )}
-
-            {examSet && (
-              <div className="bg-white rounded-xl shadow p-4 space-y-3">
-                <p className="font-medium">
-                  생성 완료 — 듣기 {examSet.listening.length}문항 / 독해 {examSet.reading.length}문항
-                </p>
-                <details className="text-sm">
-                  <summary className="cursor-pointer text-blue-600">전체 JSON 보기</summary>
-                  <pre className="text-xs bg-gray-50 rounded-lg p-3 overflow-auto max-h-96 whitespace-pre-wrap mt-2">
-                    {JSON.stringify(examSet, null, 2)}
-                  </pre>
-                </details>
-              </div>
-            )}
-
-            {examSet && !ttsApiKey && (
-              <p className="text-sm text-gray-500">
-                TTS API 키가 없어 듣기 MP3 생성을 건너뜁니다. (API 키 설정 화면에서 입력 가능)
-              </p>
-            )}
-
-            {examSet && ttsApiKey && (
-              <ListeningAudioPanel
-                units={listeningClipUnits}
-                statusMap={clipStatusMap}
-                generating={clipGenerating}
-                merging={audioMerging}
-                mergeFailedReason={mergeFailedReason}
-                onRetryFailed={handleRetryFailedClips}
-                onMerge={handleMergeAudio}
-              />
-            )}
-
-            {examSet && (
-              <DownloadPanel
-                examSet={examSet}
-                hwpxBlob={hwpxBlob}
-                pdfBlob={pdfBlob}
-                audioBlob={audioBlob}
-                hwpxFailedReason={hwpxFailedReason}
-                pdfFailedReason={pdfFailedReason}
-                retryingStage={retryingStage}
-                onRetryHwpx={handleRetryHwpx}
-                onRetryPdf={handleRetryPdf}
-              />
             )}
           </div>
         )}
