@@ -1,9 +1,10 @@
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { z } from 'zod';
-import type { ExamOptions, ExamSet, ListeningItem, ReadingItem } from './types';
+import type { ExamOptions, ListeningItem, ReadingItem } from './types';
 import { buildListeningSystemPrompt } from './prompts/listeningPrompt';
-import { buildReadingSystemPrompt, type ReadingRange } from './prompts/readingPrompt';
+import { buildReadingSystemPrompt } from './prompts/readingPrompt';
 import { GEMINI_MODEL } from './geminiConfig';
+import type { GenerationUnit } from './generationUnits';
 
 const MAX_ATTEMPTS = 3; // 최초 시도 + 최대 2회 재시도
 
@@ -256,80 +257,60 @@ function normalizeReadingItem(raw: z.infer<typeof readingItemRawZod>): ReadingIt
   };
 }
 
-export async function generateListening(apiKey: string, options: ExamOptions): Promise<ListeningItem[]> {
-  const client = getClient(apiKey);
-  const systemInstruction = buildListeningSystemPrompt(options);
-
-  return callGeminiJson(
-    client,
-    systemInstruction,
-    '듣기 1~17번 문항을 생성하라.',
-    listeningResponseSchema,
-    (raw) => {
-      const parsed = z.object({ items: z.array(listeningItemZod) }).parse(raw);
-      if (parsed.items.length !== 17) {
-        throw new Error(`듣기 문항 개수가 17개가 아닙니다 (받은 개수: ${parsed.items.length})`);
-      }
-      return parsed.items as ListeningItem[];
-    },
-  );
+function validateUnitNumbers(items: { number: number }[], expectedNumbers: number[], label: string): void {
+  if (items.length !== expectedNumbers.length) {
+    throw new Error(`${label} 문항 개수가 ${expectedNumbers.length}개가 아닙니다 (받은 개수: ${items.length})`);
+  }
+  const received = new Set(items.map((item) => item.number));
+  const missing = expectedNumbers.filter((n) => !received.has(n));
+  if (missing.length > 0) {
+    throw new Error(`${label} 문항 번호가 요청과 일치하지 않습니다 (누락: ${missing.join(', ')})`);
+  }
 }
 
-export async function generateReading(
+// 설계스펙 v2 — 문항별 개별 생성. unit은 문항 하나(단일 번호) 또는 짝 그룹(16-17/41-42/
+// 43-45, generationUnits.ts가 구성)이며, 항상 하나의 Gemini 호출로 unit.numbers 전체를
+// 함께 생성한다. usedTopics는 독해 문항에서만 의미 있음(같은 생성 세션 내 다른 독해
+// 지문과 소재가 겹치지 않도록 지금까지 생성된 독해 문항들의 소재 요약을 누적 전달).
+export async function generateItemUnit(
   apiKey: string,
   options: ExamOptions,
-  range: ReadingRange,
+  unit: GenerationUnit,
   usedTopics: string[] = [],
-): Promise<ReadingItem[]> {
+): Promise<(ListeningItem | ReadingItem)[]> {
   const client = getClient(apiKey);
-  const systemInstruction = buildReadingSystemPrompt(options, range, usedTopics);
-  const expectedCount = range === '18-34' ? 17 : 11;
 
+  if (unit.kind === 'listening') {
+    const systemInstruction = buildListeningSystemPrompt(options, unit.numbers);
+    return callGeminiJson(
+      client,
+      systemInstruction,
+      `${unit.numbers.join(', ')}번 문항을 생성하라.`,
+      listeningResponseSchema,
+      (raw) => {
+        const parsed = z.object({ items: z.array(listeningItemZod) }).parse(raw);
+        validateUnitNumbers(parsed.items, unit.numbers, '듣기');
+        return parsed.items as ListeningItem[];
+      },
+    );
+  }
+
+  const systemInstruction = buildReadingSystemPrompt(options, unit.numbers, usedTopics);
   return callGeminiJson(
     client,
     systemInstruction,
-    `독해 ${range}번 문항을 생성하라.`,
+    `${unit.numbers.join(', ')}번 문항을 생성하라.`,
     readingResponseSchema,
     (raw) => {
       const parsed = z.object({ items: z.array(readingItemRawZod) }).parse(raw);
-      if (parsed.items.length !== expectedCount) {
-        throw new Error(`독해 ${range} 문항 개수가 ${expectedCount}개가 아닙니다 (받은 개수: ${parsed.items.length})`);
-      }
+      validateUnitNumbers(parsed.items, unit.numbers, '독해');
       return parsed.items.map(normalizeReadingItem);
     },
   );
 }
 
-function extractTopics(reading: ReadingItem[]): string[] {
+// 독해 문항의 소재가 다른 독해 문항과 겹치지 않도록, 지금까지 생성된 독해 문항들의 소재를
+// 짧게 요약해 다음 유닛의 프롬프트에 "이미 사용한 소재" 목록으로 전달할 때 사용한다.
+export function extractTopics(reading: ReadingItem[]): string[] {
   return reading.map((item) => `${item.number}번(${item.type}): ${item.passage.slice(0, 40)}...`);
-}
-
-export type GenerationStage = 'listening' | 'reading-18-34' | 'reading-35-45' | 'done';
-
-export async function generateExamSet(
-  apiKey: string,
-  options: ExamOptions,
-  onProgress?: (stage: GenerationStage) => void,
-): Promise<ExamSet> {
-  onProgress?.('listening');
-  const listening = await generateListening(apiKey, options);
-
-  onProgress?.('reading-18-34');
-  const reading1834 = await generateReading(apiKey, options, '18-34', []);
-
-  onProgress?.('reading-35-45');
-  const reading3545 = await generateReading(apiKey, options, '35-45', extractTopics(reading1834));
-
-  onProgress?.('done');
-
-  return {
-    metadata: {
-      title: `${options.yearLevel} 영어영역`,
-      academyBranch: options.academyBranch,
-      grade: options.grade,
-      createdAt: new Date().toISOString(),
-    },
-    listening,
-    reading: [...reading1834, ...reading3545],
-  };
 }

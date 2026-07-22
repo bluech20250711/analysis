@@ -3,11 +3,19 @@ import ApiKeySettings from './components/ApiKeySettings';
 import ExamModeCards, { type ExamMode } from './components/ExamModeCards';
 import ExamOptionsForm from './components/ExamOptionsForm';
 import GenerationProgress, { type ProgressStep } from './components/GenerationProgress';
+import ItemGenerationStatus from './components/ItemGenerationStatus';
 import DownloadPanel from './components/DownloadPanel';
 import ListeningAudioPanel from './components/ListeningAudioPanel';
 import TypeSelectionPanel from './components/TypeSelectionPanel';
 import { getGeminiApiKey, getTtsApiKey, hasGeminiApiKey } from './lib/apiKeyStorage';
-import { generateExamSet, type GenerationStage } from './lib/gemini';
+import { extractTopics } from './lib/gemini';
+import {
+  generateExamItems,
+  regenerateFailedItems,
+  type ItemStatusEntry,
+} from './lib/examGenerationOrchestration';
+import { buildGenerationUnits } from './lib/generationUnits';
+import { DEFAULT_EXAM_OPTIONS } from './lib/defaultExamOptions';
 import { requestHwpx, requestPdf, getListeningClipsStatus } from './lib/apiClient';
 import {
   buildListeningClipUnits,
@@ -19,41 +27,53 @@ import {
 } from './lib/audioOrchestration';
 import type { ListeningClipsStatusMap } from './lib/audio/listeningClipsStore';
 import { loadAudioSessionId, loadExamSet, saveAudioSessionId, saveExamSet } from './lib/examSetStorage';
-import type { ExamSet, ExamOptions } from './lib/types';
+import type { ExamSet, ExamOptions, ListeningItem, ReadingItem } from './lib/types';
 
 type View = 'main' | 'settings';
-type PipelineStage = GenerationStage | 'hwpx' | 'pdf';
+// Gemini 문항 생성(문항별 개별 호출, ItemGenerationStatus로 표시)이 끝난 뒤 이어지는 단계만
+// 여기 남는다 — 45개(또는 선택된 개수)의 개별 호출 자체는 더 이상 하나의 "stage"가 아니다.
+type PipelineStage = 'hwpx' | 'pdf' | 'done';
 type RetryableStage = 'hwpx' | 'pdf';
 
-const DEFAULT_OPTIONS: ExamOptions = {
-  yearLevel: '2027학년도 수능 대비 / 고3 6월 모의평가 수준',
-  ebsLinked: false,
-  grade: '고3',
-  academyBranch: '이언어학원 나루관',
-};
+const ALL_ITEM_NUMBERS = Array.from({ length: 45 }, (_, i) => i + 1);
 
 const STEP_LABELS: Record<PipelineStage, string> = {
-  listening: '듣기 1~17번 문항 생성',
-  'reading-18-34': '독해 18~34번 문항 생성',
-  'reading-35-45': '독해 35~45번 문항 생성',
   hwpx: '시험지 HWPX 생성',
   pdf: '시험지 PDF 생성',
   done: '완료',
 };
 
 function buildSteps(): ProgressStep[] {
-  const keys: PipelineStage[] = ['listening', 'reading-18-34', 'reading-35-45', 'hwpx', 'pdf', 'done'];
+  const keys: PipelineStage[] = ['hwpx', 'pdf', 'done'];
   return keys.map((key) => ({ key, label: STEP_LABELS[key] }));
 }
 
 const steps = buildSteps();
+
+function assembleExamSet(
+  listening: ListeningItem[],
+  reading: ReadingItem[],
+  options: ExamOptions,
+  title: string,
+): ExamSet {
+  return {
+    metadata: {
+      title,
+      academyBranch: options.academyBranch,
+      grade: options.grade,
+      createdAt: new Date().toISOString(),
+    },
+    listening: [...listening].sort((a, b) => a.number - b.number),
+    reading: [...reading].sort((a, b) => a.number - b.number),
+  };
+}
 
 function App() {
   const [view, setView] = useState<View>(hasGeminiApiKey() ? 'main' : 'settings');
   // 메인 화면 상단 3분기 카드(설계스펙 12절) — 카드를 고르기 전엔 아무 패널도 안 보인다.
   const [activeMode, setActiveMode] = useState<ExamMode | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [stage, setStage] = useState<PipelineStage | null>(null);
+  const [pipelineStage, setPipelineStage] = useState<PipelineStage | null>(null);
   const [error, setError] = useState<string | null>(null);
   // 뒷단계(TTS/HWPX/PDF)가 실패해도 Gemini를 다시 호출하지 않고 이미 생성된 문항으로 그
   // 단계만 재시도할 수 있도록, 마지막으로 생성된 문항 JSON을 localStorage에서 복원해온다.
@@ -64,11 +84,22 @@ function App() {
   const [pdfFailedReason, setPdfFailedReason] = useState<string | undefined>();
   const [retryingStage, setRetryingStage] = useState<RetryableStage | null>(null);
 
+  // 문항별 개별 Gemini 생성(설계스펙 v2 — "모의고사 1세트"/"모의고사 유형별" 공용) 상태.
+  // genNumbers는 이번에 요청한 전체 문항 번호(짝 그룹 확장 포함), genStatusMap은 번호별
+  // 진행상황. 실패한 번호만 다시 골라 재시도할 수 있도록 지금까지 생성된 문항도 별도 보관한다.
+  const [genNumbers, setGenNumbers] = useState<number[]>([]);
+  const [genStatusMap, setGenStatusMap] = useState<Record<number, ItemStatusEntry>>({});
+  const [itemGenerating, setItemGenerating] = useState(false);
+  const [generatedListening, setGeneratedListening] = useState<ListeningItem[]>([]);
+  const [generatedReading, setGeneratedReading] = useState<ReadingItem[]>([]);
+  const [genOptions, setGenOptions] = useState<ExamOptions | null>(null);
+  const [genTitle, setGenTitle] = useState<string>('모의고사');
+
   // 설계스펙 v2(5절, 문항별 개별 생성) — 듣기 음성은 더 이상 위 파이프라인의 일부가 아니라
   // 문항별로 독립 진행되는 별도 상태다. audioSessionId는 examSet과 함께 저장되어 새로고침
   // 후에도 같은 Netlify Blobs 네임스페이스를 가리킨다. examSet이 캐시에서 복원된 경우
-  // audioSessionId/listeningClipUnits도 그 자리에서 동기적으로 함께 복원한다(handleGenerate로
-  // 새로 생성할 때는 그쪽에서 자체적으로 새로 만들어 덮어씀).
+  // audioSessionId/listeningClipUnits도 그 자리에서 동기적으로 함께 복원한다(새로 생성할 때는
+  // finalizeGeneratedExam이 자체적으로 새로 만들어 덮어씀).
   const [audioSessionId, setAudioSessionId] = useState<string | null>(() => {
     if (!examSet) return null;
     const existing = loadAudioSessionId();
@@ -86,7 +117,7 @@ function App() {
   const [audioMerging, setAudioMerging] = useState(false);
   const [mergeFailedReason, setMergeFailedReason] = useState<string | undefined>();
 
-  const loading = stage !== null && stage !== 'done';
+  const loading = itemGenerating || (pipelineStage !== null && pipelineStage !== 'done') || retryingStage !== null;
   const ttsApiKey = getTtsApiKey();
 
   // 캐시에서 복원된 examSet/audioSessionId가 있으면, 지금까지의 문항별 생성 상태를 한 번만
@@ -108,6 +139,16 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 다른 카드로 전환할 때, 진행 중이 아니라면 이전 카드에서 남은 문항 생성 진행상황(번호
+  // 그리드)을 지워 새 카드에서 엉뚱한 이전 결과가 보이지 않게 한다.
+  const handleSelectMode = (mode: ExamMode) => {
+    if (mode !== activeMode && !itemGenerating) {
+      setGenNumbers([]);
+      setGenStatusMap({});
+    }
+    setActiveMode(mode);
+  };
+
   // Gemini 재호출 없이 문항 데이터로만 동작 — 실패해도 계속 다음 문항으로 진행한다.
   const runClipGeneration = async (sessionId: string, apiKey: string, units: ListeningClipUnit[]) => {
     if (units.length === 0) return;
@@ -125,7 +166,54 @@ function App() {
     }
   };
 
-  const handleGenerate = async (options: ExamOptions) => {
+  // 문항 생성이 전부 성공했을 때만 호출 — ExamSet을 조립해 캐싱하고, 문항별 음성 생성을
+  // (있으면) 백그라운드로 시작한 뒤 HWPX/PDF를 순서대로 생성하고 결과 화면으로 전환한다.
+  const finalizeGeneratedExam = async (
+    listening: ListeningItem[],
+    reading: ReadingItem[],
+    options: ExamOptions,
+    title: string,
+  ) => {
+    const generated = assembleExamSet(listening, reading, options, title);
+    setExamSet(generated);
+    saveExamSet(generated);
+
+    const sessionId = crypto.randomUUID();
+    saveAudioSessionId(sessionId);
+    setAudioSessionId(sessionId);
+    const units = buildListeningClipUnits(generated.listening);
+    setListeningClipUnits(units);
+
+    if (ttsApiKey && units.length > 0) {
+      void runClipGeneration(sessionId, ttsApiKey, units);
+    }
+
+    setActiveMode('full-set');
+
+    setPipelineStage('hwpx');
+    try {
+      const hwpx = await requestHwpx(generated.listening, generated.reading);
+      setHwpxBlob(hwpx);
+    } catch (hwpxErr) {
+      setHwpxFailedReason(hwpxErr instanceof Error ? hwpxErr.message : String(hwpxErr));
+    }
+
+    setPipelineStage('pdf');
+    try {
+      const pdf = await requestPdf(generated);
+      setPdfBlob(pdf);
+    } catch (pdfErr) {
+      setPdfFailedReason(pdfErr instanceof Error ? pdfErr.message : String(pdfErr));
+    }
+
+    setPipelineStage('done');
+  };
+
+  // 문항 번호 목록을 받아 그 문항들만 Gemini로 순차 생성한다 — "모의고사 1세트"(1~45 전체)와
+  // "모의고사 유형별"(체크된 번호만) 양쪽이 공유하는 단일 진입점(사용자 확정: 1세트도 문항별
+  // 개별 호출로 통일). 짝 문항(16-17/41-42/43-45)은 buildGenerationUnits가 자동으로 그룹
+  // 전체를 포함시킨다.
+  const handleGenerateItems = async (numbers: number[], options: ExamOptions, title: string) => {
     if (!hasGeminiApiKey()) {
       setNotice('API 키를 먼저 입력해주세요.');
       setView('settings');
@@ -143,46 +231,85 @@ function App() {
     setClipStatusMap({});
     setAudioBlob(undefined);
     setMergeFailedReason(undefined);
-    setStage('listening');
+    setPipelineStage(null);
+
+    const units = buildGenerationUnits(numbers);
+    const expandedNumbers = units.flatMap((unit) => unit.numbers).sort((a, b) => a - b);
+
+    setGenNumbers(expandedNumbers);
+    setGenStatusMap(Object.fromEntries(expandedNumbers.map((n) => [n, { status: 'pending' as const }])));
+    setGeneratedListening([]);
+    setGeneratedReading([]);
+    setGenOptions(options);
+    setGenTitle(title);
+    setItemGenerating(true);
 
     try {
       const geminiApiKey = getGeminiApiKey()!;
-      const generated = await generateExamSet(geminiApiKey, options, setStage);
-      setExamSet(generated);
-      saveExamSet(generated);
+      const result = await generateExamItems(geminiApiKey, options, units, (unitNumbers, entry) => {
+        setGenStatusMap((prev) => {
+          const next = { ...prev };
+          for (const n of unitNumbers) next[n] = entry;
+          return next;
+        });
+      });
+      setGeneratedListening(result.listening);
+      setGeneratedReading(result.reading);
 
-      const sessionId = crypto.randomUUID();
-      saveAudioSessionId(sessionId);
-      setAudioSessionId(sessionId);
-      const units = buildListeningClipUnits(generated.listening);
-      setListeningClipUnits(units);
-
-      // 문항별 음성 생성은 HWPX/PDF와 독립적으로 진행한다(병합은 별도 버튼으로만 실행되므로
-      // 이 파이프라인의 완료를 기다릴 필요가 없다) — await하지 않고 백그라운드로 흘려보낸다.
-      if (ttsApiKey) {
-        void runClipGeneration(sessionId, ttsApiKey, units);
+      const succeeded = new Set([...result.listening.map((i) => i.number), ...result.reading.map((i) => i.number)]);
+      const allSucceeded = expandedNumbers.every((n) => succeeded.has(n));
+      if (allSucceeded) {
+        await finalizeGeneratedExam(result.listening, result.reading, options, title);
       }
-
-      setStage('hwpx');
-      try {
-        const hwpx = await requestHwpx(generated.listening, generated.reading);
-        setHwpxBlob(hwpx);
-      } catch (hwpxErr) {
-        setHwpxFailedReason(hwpxErr instanceof Error ? hwpxErr.message : String(hwpxErr));
-      }
-
-      setStage('pdf');
-      try {
-        const pdf = await requestPdf(generated);
-        setPdfBlob(pdf);
-      } catch (pdfErr) {
-        setPdfFailedReason(pdfErr instanceof Error ? pdfErr.message : String(pdfErr));
-      }
-
-      setStage('done');
     } catch (err) {
       setError(err instanceof Error ? err.message : '문항 생성 중 오류가 발생했습니다.');
-      setStage(null);
+    } finally {
+      setItemGenerating(false);
+    }
+  };
+
+  const handleSubmitFullSet = (options: ExamOptions) => {
+    void handleGenerateItems(ALL_ITEM_NUMBERS, options, `${options.grade} 모의고사 1세트`);
+  };
+
+  // 실패한 문항 번호만 다시 골라 재생성한다 — 이미 성공한 문항은 그대로 두고 합친다.
+  const handleRetryFailedItems = async () => {
+    if (!genOptions) return;
+    const failedNumbers = genNumbers.filter((n) => genStatusMap[n]?.status === 'error');
+    if (failedNumbers.length === 0) return;
+
+    setItemGenerating(true);
+    try {
+      const geminiApiKey = getGeminiApiKey()!;
+      const usedTopics = extractTopics(generatedReading);
+      const result = await regenerateFailedItems(
+        geminiApiKey,
+        genOptions,
+        failedNumbers,
+        (unitNumbers, entry) => {
+          setGenStatusMap((prev) => {
+            const next = { ...prev };
+            for (const n of unitNumbers) next[n] = entry;
+            return next;
+          });
+        },
+        usedTopics,
+      );
+
+      const newListening = [...generatedListening, ...result.listening];
+      const newReading = [...generatedReading, ...result.reading];
+      setGeneratedListening(newListening);
+      setGeneratedReading(newReading);
+
+      const succeeded = new Set([...newListening.map((i) => i.number), ...newReading.map((i) => i.number)]);
+      const allSucceeded = genNumbers.every((n) => succeeded.has(n));
+      if (allSucceeded) {
+        await finalizeGeneratedExam(newListening, newReading, genOptions, genTitle);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '문항 재생성 중 오류가 발생했습니다.');
+    } finally {
+      setItemGenerating(false);
     }
   };
 
@@ -283,19 +410,38 @@ function App() {
           />
         ) : (
           <div className="max-w-5xl mx-auto space-y-4">
-            <ExamModeCards activeMode={activeMode} onSelect={setActiveMode} />
+            <ExamModeCards activeMode={activeMode} onSelect={handleSelectMode} />
 
-            {activeMode === 'by-type' && <TypeSelectionPanel />}
+            {activeMode === 'by-type' && (
+              <TypeSelectionPanel
+                genNumbers={genNumbers}
+                genStatusMap={genStatusMap}
+                generating={itemGenerating}
+                onGenerate={(numbers, options, title) => void handleGenerateItems(numbers, options, title)}
+                onRetryFailed={() => void handleRetryFailedItems()}
+              />
+            )}
 
             {activeMode === 'full-set' && (
               <div className="max-w-2xl mx-auto space-y-4">
                 <ExamOptionsForm
-                  initialOptions={DEFAULT_OPTIONS}
-                  onSubmit={handleGenerate}
-                  disabled={loading || retryingStage !== null}
+                  initialOptions={DEFAULT_EXAM_OPTIONS}
+                  onSubmit={handleSubmitFullSet}
+                  disabled={loading}
                 />
 
-                {loading && <GenerationProgress steps={steps} currentKey={stage} />}
+                {genNumbers.length > 0 && !examSet && (
+                  <ItemGenerationStatus
+                    numbers={genNumbers}
+                    statusMap={genStatusMap}
+                    generating={itemGenerating}
+                    onRetryFailed={() => void handleRetryFailedItems()}
+                  />
+                )}
+
+                {pipelineStage && pipelineStage !== 'done' && (
+                  <GenerationProgress steps={steps} currentKey={pipelineStage} />
+                )}
 
                 {error && (
                   <div className="px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
@@ -317,13 +463,13 @@ function App() {
                   </div>
                 )}
 
-                {examSet && !ttsApiKey && (
+                {examSet && examSet.listening.length > 0 && !ttsApiKey && (
                   <p className="text-sm text-gray-500">
                     TTS API 키가 없어 듣기 MP3 생성을 건너뜁니다. (API 키 설정 화면에서 입력 가능)
                   </p>
                 )}
 
-                {examSet && ttsApiKey && (
+                {examSet && examSet.listening.length > 0 && ttsApiKey && (
                   <ListeningAudioPanel
                     units={listeningClipUnits}
                     statusMap={clipStatusMap}
