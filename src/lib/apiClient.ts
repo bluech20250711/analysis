@@ -1,4 +1,5 @@
-import type { TtsLineRequest, TtsLineResult } from './tts/types';
+import type { ListeningClipsStatusMap } from './audio/listeningClipsStore';
+import type { TtsLineRequest } from './tts/types';
 import type { MergeSegmentSpec } from './audio/types';
 import type { ExamSet, ListeningItem, ReadingItem } from './types';
 
@@ -33,54 +34,48 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   return snippet ? `${fallback} (${statusInfo}): ${snippet}` : `${fallback} (${statusInfo})`;
 }
 
-export async function startAudioClipGeneration(
-  jobId: string,
+// 설계스펙 v2(5절, 문항별 개별 생성): 문항 하나(또는 인트로/아웃트로)의 TTS 생성만 요청한다.
+// itemKey는 "1".."17" 또는 "intro"/"outro". 이 요청이 실패해도 다른 문항의 이미 생성된
+// 클립에는 영향이 없다(Netlify Blobs에 문항별로 독립된 키로 저장되기 때문).
+export async function startListeningClipGeneration(
+  audioSessionId: string,
+  itemKey: string,
   ttsApiKey: string,
   lines: TtsLineRequest[],
 ): Promise<void> {
   const response = await fetch('/.netlify/functions/generate-audio-background', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jobId, apiKey: ttsApiKey, lines }),
+    body: JSON.stringify({ audioSessionId, itemKey, apiKey: ttsApiKey, lines }),
   });
-  if (!response.ok) throw new Error(await readErrorMessage(response, 'TTS 생성 요청에 실패했습니다.'));
-}
-
-export type AudioClipsPoll =
-  | { status: 'pending' }
-  | { status: 'error'; message: string }
-  | { status: 'done'; clips: TtsLineResult[] };
-
-export async function pollAudioClipsOnce(jobId: string): Promise<AudioClipsPoll> {
-  const response = await fetch(`/.netlify/functions/get-audio-clips?jobId=${encodeURIComponent(jobId)}`);
-  if (!response.ok) throw new Error(await readErrorMessage(response, 'TTS 생성 상태 조회에 실패했습니다.'));
-  return (await response.json()) as AudioClipsPoll;
-}
-
-export async function pollAudioClipsUntilDone(
-  jobId: string,
-  { intervalMs = 3000, timeoutMs = 5 * 60 * 1000 }: { intervalMs?: number; timeoutMs?: number } = {},
-): Promise<TtsLineResult[]> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const result = await pollAudioClipsOnce(jobId);
-    if (result.status === 'done') return result.clips;
-    if (result.status === 'error') throw new Error(result.message);
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `문항(${itemKey}) 음성 생성 요청에 실패했습니다.`));
   }
-  throw new Error('TTS 생성이 제한 시간 내에 끝나지 않았습니다.');
+}
+
+// 문항별 상태를 한 번의 호출로 전부 조회한다(최대 17개 문항 + 인트로/아웃트로).
+export async function getListeningClipsStatus(audioSessionId: string): Promise<ListeningClipsStatusMap> {
+  const response = await fetch(
+    `/.netlify/functions/get-listening-clips-status?audioSessionId=${encodeURIComponent(audioSessionId)}`,
+  );
+  if (!response.ok) throw new Error(await readErrorMessage(response, '음성 생성 상태 조회에 실패했습니다.'));
+  return (await response.json()) as ListeningClipsStatusMap;
 }
 
 // segments는 클립 id만 참조하는 경량 스펙(MergeSegmentSpec)이다 — 실제 오디오 바이트는
-// clipsJobId로 서버(merge-audio-background)가 Netlify Blobs에서 직접 읽어온다. 예전에는
-// segments에 오디오 base64를 통째로 실어 보냈는데, 듣기 전체 분량이면 AWS Lambda 비동기
-// invoke 페이로드 한도를 넘겨 HTTP 500 "Internal Error"로 거부당하는 문제가 있었다(실사용
-// 중 발견 — audio/types.ts 주석 참고).
-export async function startAudioMerge(jobId: string, clipsJobId: string, segments: MergeSegmentSpec[]): Promise<void> {
+// audioSessionId로 서버(merge-audio-background)가 Netlify Blobs에서 문항별로 직접 읽어온다.
+// 예전에는 segments에 오디오 base64를 통째로 실어 보냈는데, 듣기 전체 분량이면 AWS Lambda
+// 비동기 invoke 페이로드 한도를 넘겨 HTTP 500 "Internal Error"로 거부당하는 문제가 있었다
+// (실사용 중 발견 — audio/types.ts 주석 참고).
+export async function startAudioMerge(
+  jobId: string,
+  audioSessionId: string,
+  segments: MergeSegmentSpec[],
+): Promise<void> {
   const response = await fetch('/.netlify/functions/merge-audio-background', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jobId, clipsJobId, segments }),
+    body: JSON.stringify({ jobId, audioSessionId, segments }),
   });
   if (!response.ok) throw new Error(await readErrorMessage(response, '오디오 병합 요청에 실패했습니다.'));
 }

@@ -1,18 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ApiKeySettings from './components/ApiKeySettings';
 import ExamOptionsForm from './components/ExamOptionsForm';
 import GenerationProgress, { type ProgressStep } from './components/GenerationProgress';
 import DownloadPanel from './components/DownloadPanel';
+import ListeningAudioPanel from './components/ListeningAudioPanel';
 import { getGeminiApiKey, getTtsApiKey, hasGeminiApiKey } from './lib/apiKeyStorage';
 import { generateExamSet, type GenerationStage } from './lib/gemini';
-import { requestHwpx, requestPdf } from './lib/apiClient';
-import { synthesizeListeningAudio } from './lib/audioOrchestration';
-import { loadExamSet, saveExamSet } from './lib/examSetStorage';
+import { requestHwpx, requestPdf, getListeningClipsStatus } from './lib/apiClient';
+import {
+  buildListeningClipUnits,
+  collectKnownClipIds,
+  generateListeningClips,
+  mergeListeningAudio,
+  regenerateFailedListeningClips,
+  type ListeningClipUnit,
+} from './lib/audioOrchestration';
+import type { ListeningClipsStatusMap } from './lib/audio/listeningClipsStore';
+import { loadAudioSessionId, loadExamSet, saveAudioSessionId, saveExamSet } from './lib/examSetStorage';
 import type { ExamSet, ExamOptions } from './lib/types';
 
 type View = 'main' | 'settings';
-type PipelineStage = GenerationStage | 'audio' | 'hwpx' | 'pdf';
-type RetryableStage = 'audio' | 'hwpx' | 'pdf';
+type PipelineStage = GenerationStage | 'hwpx' | 'pdf';
+type RetryableStage = 'hwpx' | 'pdf';
 
 const DEFAULT_OPTIONS: ExamOptions = {
   yearLevel: '2027학년도 수능 대비 / 고3 6월 모의평가 수준',
@@ -25,18 +34,17 @@ const STEP_LABELS: Record<PipelineStage, string> = {
   listening: '듣기 1~17번 문항 생성',
   'reading-18-34': '독해 18~34번 문항 생성',
   'reading-35-45': '독해 35~45번 문항 생성',
-  audio: '듣기 음성 합성 + 오디오 병합',
   hwpx: '시험지 HWPX 생성',
   pdf: '시험지 PDF 생성',
   done: '완료',
 };
 
-function buildSteps(includeAudio: boolean): ProgressStep[] {
-  const keys: PipelineStage[] = ['listening', 'reading-18-34', 'reading-35-45'];
-  if (includeAudio) keys.push('audio');
-  keys.push('hwpx', 'pdf', 'done');
+function buildSteps(): ProgressStep[] {
+  const keys: PipelineStage[] = ['listening', 'reading-18-34', 'reading-35-45', 'hwpx', 'pdf', 'done'];
   return keys.map((key) => ({ key, label: STEP_LABELS[key] }));
 }
+
+const steps = buildSteps();
 
 function App() {
   const [view, setView] = useState<View>(hasGeminiApiKey() ? 'main' : 'settings');
@@ -48,15 +56,70 @@ function App() {
   const [examSet, setExamSet] = useState<ExamSet | null>(() => loadExamSet());
   const [hwpxBlob, setHwpxBlob] = useState<Blob | undefined>();
   const [pdfBlob, setPdfBlob] = useState<Blob | undefined>();
-  const [audioBlob, setAudioBlob] = useState<Blob | undefined>();
-  const [audioSkippedReason, setAudioSkippedReason] = useState<string | undefined>();
   const [hwpxFailedReason, setHwpxFailedReason] = useState<string | undefined>();
   const [pdfFailedReason, setPdfFailedReason] = useState<string | undefined>();
   const [retryingStage, setRetryingStage] = useState<RetryableStage | null>(null);
 
+  // 설계스펙 v2(5절, 문항별 개별 생성) — 듣기 음성은 더 이상 위 파이프라인의 일부가 아니라
+  // 문항별로 독립 진행되는 별도 상태다. audioSessionId는 examSet과 함께 저장되어 새로고침
+  // 후에도 같은 Netlify Blobs 네임스페이스를 가리킨다. examSet이 캐시에서 복원된 경우
+  // audioSessionId/listeningClipUnits도 그 자리에서 동기적으로 함께 복원한다(handleGenerate로
+  // 새로 생성할 때는 그쪽에서 자체적으로 새로 만들어 덮어씀).
+  const [audioSessionId, setAudioSessionId] = useState<string | null>(() => {
+    if (!examSet) return null;
+    const existing = loadAudioSessionId();
+    if (existing) return existing;
+    const fresh = crypto.randomUUID();
+    saveAudioSessionId(fresh);
+    return fresh;
+  });
+  const [listeningClipUnits, setListeningClipUnits] = useState<ListeningClipUnit[]>(() =>
+    examSet ? buildListeningClipUnits(examSet.listening) : [],
+  );
+  const [clipStatusMap, setClipStatusMap] = useState<ListeningClipsStatusMap>({});
+  const [clipGenerating, setClipGenerating] = useState(false);
+  const [audioBlob, setAudioBlob] = useState<Blob | undefined>();
+  const [audioMerging, setAudioMerging] = useState(false);
+  const [mergeFailedReason, setMergeFailedReason] = useState<string | undefined>();
+
   const loading = stage !== null && stage !== 'done';
   const ttsApiKey = getTtsApiKey();
-  const steps = buildSteps(!!ttsApiKey);
+
+  // 캐시에서 복원된 examSet/audioSessionId가 있으면, 지금까지의 문항별 생성 상태를 한 번만
+  // 서버에서 읽어와 화면에 반영한다(마운트 시 1회 — Netlify Function 호출이라 useState
+  // 초기화 함수 안에서는 할 수 없는 비동기 작업).
+  useEffect(() => {
+    if (!examSet || !audioSessionId || !ttsApiKey) return;
+    let cancelled = false;
+    getListeningClipsStatus(audioSessionId)
+      .then((statusMap) => {
+        if (!cancelled) setClipStatusMap(statusMap);
+      })
+      .catch(() => {
+        // 상태 조회 실패는 조용히 무시 — 사용자는 그래도 재생성/병합 버튼으로 이어갈 수 있음
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Gemini 재호출 없이 문항 데이터로만 동작 — 실패해도 계속 다음 문항으로 진행한다.
+  const runClipGeneration = async (sessionId: string, apiKey: string, units: ListeningClipUnit[]) => {
+    if (units.length === 0) return;
+    setClipGenerating(true);
+    try {
+      await generateListeningClips(sessionId, apiKey, units, (itemKey, entry) => {
+        setClipStatusMap((prev) => ({ ...prev, [itemKey]: entry }));
+      });
+    } catch (err) {
+      // generateListeningClips 자체는 문항별 에러를 삼키고 계속 진행하므로, 여기 도달하는
+      // 경우는 네트워크 등 더 근본적인 문제 — 조용히 무시하지 않고 콘솔에 남긴다.
+      console.warn('[App] 듣기 음성 생성 중 예기치 못한 오류:', err);
+    } finally {
+      setClipGenerating(false);
+    }
+  };
 
   const handleGenerate = async (options: ExamOptions) => {
     if (!hasGeminiApiKey()) {
@@ -70,10 +133,12 @@ function App() {
     setExamSet(null);
     setHwpxBlob(undefined);
     setPdfBlob(undefined);
-    setAudioBlob(undefined);
-    setAudioSkippedReason(undefined);
     setHwpxFailedReason(undefined);
     setPdfFailedReason(undefined);
+    setListeningClipUnits([]);
+    setClipStatusMap({});
+    setAudioBlob(undefined);
+    setMergeFailedReason(undefined);
     setStage('listening');
 
     try {
@@ -82,18 +147,16 @@ function App() {
       setExamSet(generated);
       saveExamSet(generated);
 
+      const sessionId = crypto.randomUUID();
+      saveAudioSessionId(sessionId);
+      setAudioSessionId(sessionId);
+      const units = buildListeningClipUnits(generated.listening);
+      setListeningClipUnits(units);
+
+      // 문항별 음성 생성은 HWPX/PDF와 독립적으로 진행한다(병합은 별도 버튼으로만 실행되므로
+      // 이 파이프라인의 완료를 기다릴 필요가 없다) — await하지 않고 백그라운드로 흘려보낸다.
       if (ttsApiKey) {
-        setStage('audio');
-        try {
-          const audio = await synthesizeListeningAudio(ttsApiKey, generated.listening);
-          setAudioBlob(audio);
-        } catch (audioErr) {
-          setAudioSkippedReason(
-            `듣기 MP3 생성에 실패했습니다: ${audioErr instanceof Error ? audioErr.message : audioErr}`,
-          );
-        }
-      } else {
-        setAudioSkippedReason('TTS API 키가 없어 듣기 MP3 생성을 건너뛰었습니다. (API 키 설정 화면에서 입력 가능)');
+        void runClipGeneration(sessionId, ttsApiKey, units);
       }
 
       setStage('hwpx');
@@ -119,22 +182,7 @@ function App() {
     }
   };
 
-  // TTS/HWPX/PDF는 이미 생성돼 있는 examSet(문항 JSON)만 다시 사용해 해당 단계만 재시도한다.
-  // Gemini를 다시 호출하지 않으므로 디버깅/재배포 검증 중에도 API 호출을 반복 소모하지 않는다.
-  const handleRetryAudio = async () => {
-    if (!examSet || !ttsApiKey) return;
-    setRetryingStage('audio');
-    setAudioSkippedReason(undefined);
-    try {
-      const audio = await synthesizeListeningAudio(ttsApiKey, examSet.listening);
-      setAudioBlob(audio);
-    } catch (audioErr) {
-      setAudioSkippedReason(`듣기 MP3 생성에 실패했습니다: ${audioErr instanceof Error ? audioErr.message : audioErr}`);
-    } finally {
-      setRetryingStage(null);
-    }
-  };
-
+  // HWPX/PDF는 이미 생성돼 있는 examSet(문항 JSON)만 다시 사용해 해당 단계만 재시도한다.
   const handleRetryHwpx = async () => {
     if (!examSet) return;
     setRetryingStage('hwpx');
@@ -160,6 +208,42 @@ function App() {
       setPdfFailedReason(pdfErr instanceof Error ? pdfErr.message : String(pdfErr));
     } finally {
       setRetryingStage(null);
+    }
+  };
+
+  // 실패한 문항만 골라 다시 생성한다 — 이미 성공한 문항의 클립(listening-clip-*)은 그대로 둔다.
+  const handleRetryFailedClips = async () => {
+    if (!audioSessionId || !ttsApiKey) return;
+    const failedItemKeys = new Set(
+      listeningClipUnits.filter((unit) => clipStatusMap[unit.itemKey]?.status === 'error').map((unit) => unit.itemKey),
+    );
+    if (failedItemKeys.size === 0) return;
+
+    setClipGenerating(true);
+    try {
+      await regenerateFailedListeningClips(audioSessionId, ttsApiKey, listeningClipUnits, failedItemKeys, (itemKey, entry) => {
+        setClipStatusMap((prev) => ({ ...prev, [itemKey]: entry }));
+      });
+    } catch (err) {
+      console.warn('[App] 실패 문항 재생성 중 예기치 못한 오류:', err);
+    } finally {
+      setClipGenerating(false);
+    }
+  };
+
+  // 17개 문항(+인트로/아웃트로) 전부 성공했을 때만 ListeningAudioPanel에서 활성화되는 버튼.
+  const handleMergeAudio = async () => {
+    if (!audioSessionId || !examSet) return;
+    setAudioMerging(true);
+    setMergeFailedReason(undefined);
+    try {
+      const knownClipIds = collectKnownClipIds(listeningClipUnits, clipStatusMap);
+      const audio = await mergeListeningAudio(audioSessionId, examSet.listening, knownClipIds);
+      setAudioBlob(audio);
+    } catch (mergeErr) {
+      setMergeFailedReason(mergeErr instanceof Error ? mergeErr.message : String(mergeErr));
+    } finally {
+      setAudioMerging(false);
     }
   };
 
@@ -223,18 +307,33 @@ function App() {
               </div>
             )}
 
+            {examSet && !ttsApiKey && (
+              <p className="text-sm text-gray-500">
+                TTS API 키가 없어 듣기 MP3 생성을 건너뜁니다. (API 키 설정 화면에서 입력 가능)
+              </p>
+            )}
+
+            {examSet && ttsApiKey && (
+              <ListeningAudioPanel
+                units={listeningClipUnits}
+                statusMap={clipStatusMap}
+                generating={clipGenerating}
+                merging={audioMerging}
+                mergeFailedReason={mergeFailedReason}
+                onRetryFailed={handleRetryFailedClips}
+                onMerge={handleMergeAudio}
+              />
+            )}
+
             {examSet && (
               <DownloadPanel
                 examSet={examSet}
                 hwpxBlob={hwpxBlob}
                 pdfBlob={pdfBlob}
                 audioBlob={audioBlob}
-                audioSkippedReason={audioSkippedReason}
                 hwpxFailedReason={hwpxFailedReason}
                 pdfFailedReason={pdfFailedReason}
-                ttsApiKeyAvailable={!!ttsApiKey}
                 retryingStage={retryingStage}
-                onRetryAudio={handleRetryAudio}
                 onRetryHwpx={handleRetryHwpx}
                 onRetryPdf={handleRetryPdf}
               />

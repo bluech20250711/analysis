@@ -1,18 +1,15 @@
 import type { ExamSet } from '../lib/types';
 
-type RetryableStage = 'audio' | 'hwpx' | 'pdf';
+type RetryableStage = 'hwpx' | 'pdf';
 
 interface DownloadPanelProps {
   examSet: ExamSet;
   hwpxBlob?: Blob;
   pdfBlob?: Blob;
   audioBlob?: Blob;
-  audioSkippedReason?: string;
   hwpxFailedReason?: string;
   pdfFailedReason?: string;
-  ttsApiKeyAvailable?: boolean;
   retryingStage?: RetryableStage | null;
-  onRetryAudio?: () => void;
   onRetryHwpx?: () => void;
   onRetryPdf?: () => void;
 }
@@ -26,17 +23,16 @@ function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
+// 듣기 MP3는 더 이상 여기서 재시도하지 않는다 — 문항별 생성/재시도/병합은
+// ListeningAudioPanel이 전담하고, 여기서는 그 결과물(완성된 mp3)의 다운로드만 제공한다.
 function DownloadPanel({
   examSet,
   hwpxBlob,
   pdfBlob,
   audioBlob,
-  audioSkippedReason,
   hwpxFailedReason,
   pdfFailedReason,
-  ttsApiKeyAvailable,
   retryingStage,
-  onRetryAudio,
   onRetryHwpx,
   onRetryPdf,
 }: DownloadPanelProps) {
@@ -100,8 +96,8 @@ function DownloadPanel({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {audioBlob ? (
+        {audioBlob && (
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => downloadBlob(audioBlob, 'listening.mp3')}
@@ -109,17 +105,8 @@ function DownloadPanel({
             >
               듣기평가 MP3 다운로드
             </button>
-          ) : (
-            <p className="text-sm text-gray-500 flex-1">
-              {audioSkippedReason ?? 'MP3 미생성'}
-            </p>
-          )}
-          {ttsApiKeyAvailable && onRetryAudio && (
-            <button type="button" onClick={onRetryAudio} disabled={anyRetrying} className={retryButtonClass}>
-              {retryingStage === 'audio' ? '음성 재생성 중…' : '음성만 다시 생성'}
-            </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       <button

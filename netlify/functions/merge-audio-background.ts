@@ -2,22 +2,27 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { BackgroundHandler } from '@netlify/functions';
-import { resolveMergeSegments } from '../../src/lib/audio/buildMergePlan';
+import { itemKeyFromClipId, resolveMergeSegments } from '../../src/lib/audio/buildMergePlan';
 import { mergeSegmentsToMp3 } from '../../src/lib/audio/ffmpegMerge';
 import type { MergeSegmentSpec } from '../../src/lib/audio/types';
+import { LISTENING_CLIPS_STORE_NAME, readListeningClip } from '../../src/lib/audio/listeningClipsStore';
 import { connectBlobsForBackgroundFunction, getJobStore } from '../../src/lib/netlifyBlobsStore';
-import type { TtsLineResult } from '../../src/lib/tts/types';
 
 // Phase 5: 듣기 1-17번 개별 TTS 클립 + 신호음 + 정적구간을 하나의 MP3로 병합한다.
 // ffmpeg 병합은 Netlify 동기 함수의 10초 제한을 넘길 수 있어 Background Function으로 분리했다
 // (파일명이 "-background"로 끝나면 Netlify가 자동으로 Background Function으로 인식·최대 15분 실행).
 // Background Function은 호출자에게 즉시 202를 반환하고 결과를 되돌려줄 수 없으므로,
 // 완료 여부/결과물은 Netlify Blobs에 저장하고 get-merged-audio.ts가 폴링으로 제공한다.
+//
+// 설계스펙 v2(5절): 문항별 개별 생성 구조로 바뀌면서, 병합은 audioSessionId로 스코프된
+// listening-clip-{itemKey}(문항별 저장분)들을 문항 번호 순서대로 직접 조회해서 합치는
+// 방식을 그대로 유지한다 — 예전에 겪었던 "요청 본문에 오디오 전체를 base64로 실어 보내
+// AWS Lambda 비동기 invoke 페이로드 한도 초과" 문제(HTTP 500)가 재발하지 않도록.
 
 interface RequestBody {
   jobId: string;
-  clipsJobId: string; // generate-audio-background가 audio-clip-jobs 스토어에 클립을 저장할 때 쓴 jobId
-  segments: MergeSegmentSpec[]; // 클립 id만 참조하는 경량 스펙 — 실제 오디오는 clipsJobId로 조회
+  audioSessionId: string; // 문항별 클립이 저장된 listening-clips 스토어의 네임스페이스
+  segments: MergeSegmentSpec[]; // 클립 id만 참조하는 경량 스펙 — 실제 오디오는 audioSessionId로 조회
 }
 
 // ffmpeg-static은 optionalDependencies로 선언되어 있다 — Netlify 빌드 환경(전체 인터넷 접근
@@ -77,25 +82,32 @@ export const handler: BackgroundHandler = async (event) => {
   // 반드시 먼저 연결한다.
   connectBlobsForBackgroundFunction(event);
 
-  const { jobId, clipsJobId, segments } = JSON.parse(event.body ?? '{}') as RequestBody;
+  const { jobId, audioSessionId, segments } = JSON.parse(event.body ?? '{}') as RequestBody;
   const store = getJobStore('audio-merge-jobs');
 
   try {
     if (!jobId) throw new Error('jobId가 필요합니다.');
-    if (!clipsJobId) throw new Error('clipsJobId가 필요합니다.');
+    if (!audioSessionId) throw new Error('audioSessionId가 필요합니다.');
     if (!Array.isArray(segments) || segments.length === 0) throw new Error('segments가 비어있습니다.');
 
     const ffmpegPath = resolveFfmpegPath();
     if (!ffmpegPath) throw new Error('ffmpeg 바이너리 경로를 찾을 수 없습니다(ffmpeg-static 설치 상태를 확인하세요).');
 
-    // 실제 오디오 바이트는 요청 본문이 아니라 generate-audio-background가 이미 저장해둔
-    // audio-clip-jobs 스토어에서 직접 읽어온다 — 요청 본문에 통째로 실으면 AWS Lambda 비동기
-    // invoke 페이로드 한도를 넘겨 500 Internal Error로 거부당할 수 있다(실사용 중 발견).
-    const clipsStore = getJobStore('audio-clip-jobs');
-    const clipsRaw = await clipsStore.get(`${clipsJobId}/clips.json`, { type: 'text' });
-    if (!clipsRaw) throw new Error(`클립 데이터를 찾을 수 없습니다 (clipsJobId=${clipsJobId}).`);
-    const clips = JSON.parse(clipsRaw) as TtsLineResult[];
-    const clipsById = new Map(clips.map((clip) => [clip.id, clip.audioBase64]));
+    // segments가 실제로 참조하는 문항 단위(itemKey)만 골라 listening-clips 스토어에서
+    // 문항별로 저장된 클립을 직접 읽어온다 — 요청 본문에는 클립 id만 실려있고 오디오
+    // 바이트 자체는 절대 실리지 않는다.
+    const clipsStore = getJobStore(LISTENING_CLIPS_STORE_NAME);
+    const itemKeys = new Set<string>();
+    for (const seg of segments) {
+      if (seg.kind === 'clip') itemKeys.add(itemKeyFromClipId(seg.clipId));
+    }
+
+    const clipsById = new Map<string, string>();
+    for (const itemKey of itemKeys) {
+      const clips = await readListeningClip(clipsStore, audioSessionId, itemKey);
+      if (!clips) throw new Error(`문항(${itemKey})의 클립 데이터를 찾을 수 없습니다.`);
+      for (const clip of clips) clipsById.set(clip.id, clip.audioBase64);
+    }
 
     const resolvedSegments = resolveMergeSegments(segments, clipsById);
     const buffer = await mergeSegmentsToMp3(resolvedSegments, ffmpegPath);
