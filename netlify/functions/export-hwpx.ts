@@ -20,6 +20,7 @@ console.log(`[export-hwpx] SECTION0_PATH=${SECTION0_PATH} exists=${existsSync(SE
 interface RequestBody {
   listening: ListeningItem[];
   reading: ReadingItem[];
+  mode?: 'strict' | 'partial';
 }
 
 export const handler: Handler = async (event) => {
@@ -39,7 +40,7 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const buffer = await buildFullExamHwpx(parsed.listening, parsed.reading);
+    const buffer = await buildFullExamHwpx(parsed.listening, parsed.reading, parsed.mode ?? 'strict');
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/hwp+zip' },

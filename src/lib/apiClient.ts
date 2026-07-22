@@ -110,21 +110,27 @@ export async function pollMergedAudioUntilDone(
   throw new Error('오디오 병합이 제한 시간 내에 끝나지 않았습니다.');
 }
 
-export async function requestHwpx(listening: ListeningItem[], reading: ReadingItem[]): Promise<Blob> {
+// mode: 'strict'(기본값, "모의고사 1세트") — 45문항 중 하나라도 빠지면 서버에서 에러.
+//       'partial'("모의고사 유형별" 부분 시험지) — 실제로 생성된 문항만으로 시험지를 조립.
+export async function requestHwpx(
+  listening: ListeningItem[],
+  reading: ReadingItem[],
+  mode: 'strict' | 'partial' = 'strict',
+): Promise<Blob> {
   const response = await fetch('/.netlify/functions/export-hwpx', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ listening, reading }),
+    body: JSON.stringify({ listening, reading, mode }),
   });
   if (!response.ok) throw new Error(await readErrorMessage(response, 'HWPX 생성에 실패했습니다.'));
   return response.blob();
 }
 
-export async function requestPdf(examSet: ExamSet): Promise<Blob> {
+export async function requestPdf(examSet: ExamSet, mode: 'strict' | 'partial' = 'strict'): Promise<Blob> {
   const response = await fetch('/.netlify/functions/export-pdf', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ examSet }),
+    body: JSON.stringify({ examSet, mode }),
   });
   if (!response.ok) throw new Error(await readErrorMessage(response, 'PDF 생성에 실패했습니다.'));
   return response.blob();

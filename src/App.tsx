@@ -50,6 +50,15 @@ function buildSteps(): ProgressStep[] {
 
 const steps = buildSteps();
 
+// HWPX/PDF는 "필수 모드"(45문항 전체 — 하나라도 빠지면 에러)와 "있는 것만 모드"(부분
+// 시험지 — 없는 문항/짝 그룹은 건너뜀) 두 가지로 조립할 수 있다. 어느 카드(1세트/유형별)에서
+// 생성했는지가 아니라 실제로 45문항이 다 채워졌는지로 판단한다 — "유형별"에서 45개를 전부
+// 체크해 생성해도 완전한 시험지이므로 굳이 partial로 다룰 이유가 없고, 반대로 새로고침 후
+// 캐시에서 복원된 examSet처럼 생성 경로를 알 수 없는 경우에도 항상 정확하게 판단할 수 있다.
+function resolveHwpxPdfMode(examSet: ExamSet): 'strict' | 'partial' {
+  return examSet.listening.length === 17 && examSet.reading.length === 28 ? 'strict' : 'partial';
+}
+
 function assembleExamSet(
   listening: ListeningItem[],
   reading: ReadingItem[],
@@ -188,11 +197,14 @@ function App() {
       void runClipGeneration(sessionId, ttsApiKey, units);
     }
 
-    setActiveMode('full-set');
+    // activeMode는 건드리지 않는다 — 결과 화면은 activeMode와 무관하게 examSet 유무로
+    // 렌더링되므로("유형별"에서 생성해도 "1세트" 카드로 강제 전환되던 버그 수정), 사용자가
+    // 어느 카드에서 생성을 시작했든 그 화면에 그대로 머문 채 결과를 확인할 수 있다.
+    const mode = resolveHwpxPdfMode(generated);
 
     setPipelineStage('hwpx');
     try {
-      const hwpx = await requestHwpx(generated.listening, generated.reading);
+      const hwpx = await requestHwpx(generated.listening, generated.reading, mode);
       setHwpxBlob(hwpx);
     } catch (hwpxErr) {
       setHwpxFailedReason(hwpxErr instanceof Error ? hwpxErr.message : String(hwpxErr));
@@ -200,7 +212,7 @@ function App() {
 
     setPipelineStage('pdf');
     try {
-      const pdf = await requestPdf(generated);
+      const pdf = await requestPdf(generated, mode);
       setPdfBlob(pdf);
     } catch (pdfErr) {
       setPdfFailedReason(pdfErr instanceof Error ? pdfErr.message : String(pdfErr));
@@ -319,7 +331,7 @@ function App() {
     setRetryingStage('hwpx');
     setHwpxFailedReason(undefined);
     try {
-      const hwpx = await requestHwpx(examSet.listening, examSet.reading);
+      const hwpx = await requestHwpx(examSet.listening, examSet.reading, resolveHwpxPdfMode(examSet));
       setHwpxBlob(hwpx);
     } catch (hwpxErr) {
       setHwpxFailedReason(hwpxErr instanceof Error ? hwpxErr.message : String(hwpxErr));
@@ -333,7 +345,7 @@ function App() {
     setRetryingStage('pdf');
     setPdfFailedReason(undefined);
     try {
-      const pdf = await requestPdf(examSet);
+      const pdf = await requestPdf(examSet, resolveHwpxPdfMode(examSet));
       setPdfBlob(pdf);
     } catch (pdfErr) {
       setPdfFailedReason(pdfErr instanceof Error ? pdfErr.message : String(pdfErr));
@@ -438,7 +450,14 @@ function App() {
                     onRetryFailed={() => void handleRetryFailedItems()}
                   />
                 )}
+              </div>
+            )}
 
+            {/* 결과 화면(HWPX/PDF 진행상황, 생성된 문항, 듣기 음성, 다운로드) — 어느 카드에서
+                생성을 시작했든 activeMode와 무관하게 examSet이 있으면 그대로 보여준다("유형별"
+                에서 생성했는데 "1세트" 카드로 강제 전환되던 버그 수정). */}
+            {(examSet || (pipelineStage && pipelineStage !== 'done') || error) && (
+              <div className="max-w-2xl mx-auto space-y-4">
                 {pipelineStage && pipelineStage !== 'done' && (
                   <GenerationProgress steps={steps} currentKey={pipelineStage} />
                 )}

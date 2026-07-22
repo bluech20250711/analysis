@@ -19,6 +19,7 @@ console.log(`[export-pdf] FONT_BOLD_PATH=${FONT_BOLD_PATH} exists=${existsSync(F
 
 interface RequestBody {
   examSet: ExamSet;
+  mode?: 'strict' | 'partial';
 }
 
 export const handler: Handler = async (event) => {
@@ -38,7 +39,7 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const buffer = await buildExamPdf(parsed.examSet);
+    const buffer = await buildExamPdf(parsed.examSet, parsed.mode ?? 'strict');
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/pdf' },

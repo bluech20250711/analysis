@@ -23,7 +23,15 @@ function choiceText(choice: Choice): string {
 }
 
 // 18-45번을 번호 순서대로 순회하며 40/41-42/43-45를 각각의 블록 종류로 묶는다.
-export function buildExamBlocks(listening: ListeningItem[], reading: ReadingItem[]): ExamBlock[] {
+//
+// mode: 'strict'(기본값, "모의고사 1세트") — 45문항 중 하나라도 빠지면 에러로 실패.
+//       'partial'("모의고사 유형별" 부분 시험지) — 없는 문항(짝 그룹은 그룹 단위)은 건너뛰고
+//       실제로 있는 문항만으로 블록을 구성한다.
+export function buildExamBlocks(
+  listening: ListeningItem[],
+  reading: ReadingItem[],
+  mode: 'strict' | 'partial' = 'strict',
+): ExamBlock[] {
   const blocks: ExamBlock[] = [...listening]
     .sort((a, b) => a.number - b.number)
     .map((item) => ({ kind: 'listening', item }) as const);
@@ -32,24 +40,36 @@ export function buildExamBlocks(listening: ListeningItem[], reading: ReadingItem
 
   for (let n = 18; n <= 39; n++) {
     const item = byNumber.get(n);
-    if (!item) throw new Error(`독해 ${n}번 문항 데이터가 없습니다.`);
+    if (!item) {
+      if (mode === 'partial') continue;
+      throw new Error(`독해 ${n}번 문항 데이터가 없습니다.`);
+    }
     blocks.push({ kind: 'reading-standard', item });
   }
 
   const item40 = byNumber.get(40);
-  if (!item40) throw new Error('독해 40번 문항 데이터가 없습니다.');
-  blocks.push({ kind: 'reading-summary', item: item40 });
+  if (!item40) {
+    if (mode !== 'partial') throw new Error('독해 40번 문항 데이터가 없습니다.');
+  } else {
+    blocks.push({ kind: 'reading-summary', item: item40 });
+  }
 
   const item41 = byNumber.get(41);
   const item42 = byNumber.get(42);
-  if (!item41 || !item42) throw new Error('독해 41-42번 문항 데이터가 없습니다.');
-  blocks.push({ kind: 'reading-shared-group', items: [item41, item42] });
+  if (!item41 || !item42) {
+    if (mode !== 'partial') throw new Error('독해 41-42번 문항 데이터가 없습니다.');
+  } else {
+    blocks.push({ kind: 'reading-shared-group', items: [item41, item42] });
+  }
 
   const item43 = byNumber.get(43);
   const item44 = byNumber.get(44);
   const item45 = byNumber.get(45);
-  if (!item43 || !item44 || !item45) throw new Error('독해 43-45번 문항 데이터가 없습니다.');
-  blocks.push({ kind: 'reading-shared-group', items: [item43, item44, item45] });
+  if (!item43 || !item44 || !item45) {
+    if (mode !== 'partial') throw new Error('독해 43-45번 문항 데이터가 없습니다.');
+  } else {
+    blocks.push({ kind: 'reading-shared-group', items: [item43, item44, item45] });
+  }
 
   return blocks;
 }

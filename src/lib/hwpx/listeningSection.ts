@@ -159,20 +159,32 @@ export function renderListeningPair1617(item16: ListeningItem, item17: Listening
   );
 }
 
-export async function buildListeningSectionXml(listening: ListeningItem[]): Promise<string> {
+// mode: 'strict'(기본값, "모의고사 1세트"용) — 1~17번 중 하나라도 없으면 에러.
+//       'partial'("모의고사 유형별"의 부분 시험지용) — 없는 번호(16-17은 그룹 단위)는
+//       건너뛰고 실제로 있는 문항만으로 섹션을 조립한다.
+export async function buildListeningSectionXml(
+  listening: ListeningItem[],
+  mode: 'strict' | 'partial' = 'strict',
+): Promise<string> {
   const byNumber = new Map(listening.map((item) => [item.number, item]));
   const parts: string[] = [];
 
   for (let n = 1; n <= 15; n++) {
     const item = byNumber.get(n);
-    if (!item) throw new Error(`듣기 ${n}번 문항 데이터가 없습니다.`);
+    if (!item) {
+      if (mode === 'partial') continue;
+      throw new Error(`듣기 ${n}번 문항 데이터가 없습니다.`);
+    }
     parts.push(renderStandardListeningItem(item));
   }
 
   const item16 = byNumber.get(16);
   const item17 = byNumber.get(17);
-  if (!item16 || !item17) throw new Error('듣기 16-17번 문항 데이터가 없습니다.');
-  parts.push(renderListeningPair1617(item16, item17));
+  if (!item16 || !item17) {
+    if (mode !== 'partial') throw new Error('듣기 16-17번 문항 데이터가 없습니다.');
+  } else {
+    parts.push(renderListeningPair1617(item16, item17));
+  }
 
   return parts.join('');
 }
