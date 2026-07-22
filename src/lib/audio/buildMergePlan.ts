@@ -8,15 +8,29 @@ export function buildTtsLineId(itemNumber: number, lineIndex: number): string {
   return `${itemNumber}-${lineIndex}`;
 }
 
+// 클립 id("1-0", "intro", "outro")로부터 그 클립이 속한 문항 단위 키("1", "intro", "outro")를
+// 역산한다. merge-audio-background.ts가 병합 플랜(segments)만 보고 Netlify Blobs에서 어떤
+// listening-clip-{itemKey} 키들을 읽어와야 하는지 알아낼 때 사용한다(설계스펙 v2 — 문항별
+// 개별 생성/저장).
+export function itemKeyFromClipId(clipId: string): string {
+  if (clipId === 'intro' || clipId === 'outro') return clipId;
+  const dashIndex = clipId.indexOf('-');
+  return dashIndex === -1 ? clipId : clipId.slice(0, dashIndex);
+}
+
 export interface MergePlanInput {
   listening: ListeningItem[];
-  clipsById: Map<string, string>; // TtsLineResult.id -> audioBase64 (대사 클립 + 안내멘트 클립 포함) — 존재 검증용
-  introClipId?: string; // 듣기 시작 안내멘트 클립 id (clipsById에 있어야 함)
+  // 실제 오디오 바이트는 담지 않고, 이 id의 클립이 이미 생성되어 있는지만 검증하는 용도.
+  // (문항별 개별 생성 구조에서는 병합 버튼을 누르는 시점에 모든 문항이 이미 완료 상태이므로
+  // 클라이언트가 각 문항의 TtsLineRequest id 목록만으로 이 집합을 구성할 수 있다 — 실제
+  // 오디오 내용은 서버가 병합 시점에 Blobs에서 직접 읽어온다.)
+  knownClipIds: Set<string>;
+  introClipId?: string; // 듣기 시작 안내멘트 클립 id (knownClipIds에 있어야 함)
   outroClipId?: string; // 듣기 종료 안내멘트 클립 id
 }
 
-function clipSegmentSpec(clipsById: Map<string, string>, id: string): MergeSegmentSpec {
-  if (!clipsById.has(id)) throw new Error(`병합 플랜: 클립을 찾을 수 없습니다 (id=${id})`);
+function clipSegmentSpec(knownClipIds: Set<string>, id: string): MergeSegmentSpec {
+  if (!knownClipIds.has(id)) throw new Error(`병합 플랜: 클립을 찾을 수 없습니다 (id=${id})`);
   return { kind: 'clip', clipId: id };
 }
 
@@ -29,7 +43,7 @@ export function buildListeningMergePlan(input: MergePlanInput): MergeSegmentSpec
   const sorted = [...input.listening].sort((a, b) => a.number - b.number);
 
   if (input.introClipId) {
-    segments.push(clipSegmentSpec(input.clipsById, input.introClipId));
+    segments.push(clipSegmentSpec(input.knownClipIds, input.introClipId));
     segments.push({ kind: 'silence', seconds: INTRO_TO_FIRST_ITEM_GAP_SECONDS });
   }
 
@@ -40,13 +54,13 @@ export function buildListeningMergePlan(input: MergePlanInput): MergeSegmentSpec
 
     segments.push({ kind: 'tone', seconds: SIGNAL_TONE_SECONDS });
     item.script.forEach((_, lineIndex) => {
-      segments.push(clipSegmentSpec(input.clipsById, buildTtsLineId(item.number, lineIndex)));
+      segments.push(clipSegmentSpec(input.knownClipIds, buildTtsLineId(item.number, lineIndex)));
     });
     segments.push({ kind: 'silence', seconds: gapSecondsAfter(item) });
   }
 
   if (input.outroClipId) {
-    segments.push(clipSegmentSpec(input.clipsById, input.outroClipId));
+    segments.push(clipSegmentSpec(input.knownClipIds, input.outroClipId));
   }
 
   return segments;

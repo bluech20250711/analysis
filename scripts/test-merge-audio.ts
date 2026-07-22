@@ -114,7 +114,7 @@ async function main() {
 
   const segments: MergeSegmentSpec[] = buildListeningMergePlan({
     listening: testListening,
-    clipsById,
+    knownClipIds: new Set(clipsById.keys()),
     introClipId: 'intro',
     outroClipId: 'outro',
   });
