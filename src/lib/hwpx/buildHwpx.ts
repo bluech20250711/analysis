@@ -152,15 +152,23 @@ function insertReadingSectionBeforeTailLabel(section0: string, readingSectionXml
 
 // Phase 3 완료: 듣기 1-17번 + 독해 18-45번 45문항 전체를 하나의 hwpx로 조립한다.
 // 듣기 섹션은 원본 1-17번 위치를 그대로 교체하고, 독해 섹션은 문서 끝 "정답" 라벨 앞에 삽입한다.
-export async function buildFullExamHwpx(listening: ListeningItem[], reading: ReadingItem[]): Promise<Buffer> {
+//
+// mode: 'strict'(기본값, "모의고사 1세트") — 45문항 중 하나라도 빠지면 에러로 실패.
+//       'partial'("모의고사 유형별" 부분 시험지) — 없는 문항(짝 그룹은 그룹 단위)은 건너뛰고
+//       실제로 생성된 문항만으로 시험지를 조립한다.
+export async function buildFullExamHwpx(
+  listening: ListeningItem[],
+  reading: ReadingItem[],
+  mode: 'strict' | 'partial' = 'strict',
+): Promise<Buffer> {
   await stat(SECTION0_PATH);
   const originalSection0 = await readFile(SECTION0_PATH, 'utf-8');
 
   const { start, end } = findListeningSectionBounds(originalSection0);
-  const newListeningXml = await buildListeningSectionXml(listening);
+  const newListeningXml = await buildListeningSectionXml(listening, mode);
   const withListening = originalSection0.slice(0, start) + newListeningXml + originalSection0.slice(end);
 
-  const readingSectionXml = buildReadingSectionXml(reading);
+  const readingSectionXml = buildReadingSectionXml(reading, mode);
   const newSection0 = insertReadingSectionBeforeTailLabel(withListening, readingSectionXml);
 
   const zip = new JSZip();

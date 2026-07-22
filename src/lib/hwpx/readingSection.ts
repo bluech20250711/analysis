@@ -147,30 +147,46 @@ export function renderSummaryReadingItem(item: ReadingItem, summary: string, wid
 
 // 18-45번 전체(28문항)를 순서대로 조립한다.
 // 18-39(25/27/28 imageRef 포함)는 표준형, 40번은 요약문, 41-42/43-45는 공유 지문 묶음.
-export function buildReadingSectionXml(reading: ReadingItem[]): string {
+//
+// mode: 'strict'(기본값, "모의고사 1세트"용) — 18~45번 중 하나라도 없으면 에러(40/41-42/43-45는
+//       그룹 단위). 'partial'("모의고사 유형별"의 부분 시험지용) — 없는 번호(그룹)는 건너뛰고
+//       실제로 있는 문항만으로 섹션을 조립한다.
+export function buildReadingSectionXml(reading: ReadingItem[], mode: 'strict' | 'partial' = 'strict'): string {
   const byNumber = new Map(reading.map((item) => [item.number, item]));
   const parts: string[] = [];
 
   for (let n = 18; n <= 39; n++) {
     const item = byNumber.get(n);
-    if (!item) throw new Error(`독해 ${n}번 문항 데이터가 없습니다.`);
+    if (!item) {
+      if (mode === 'partial') continue;
+      throw new Error(`독해 ${n}번 문항 데이터가 없습니다.`);
+    }
     parts.push(renderStandardReadingItem(item));
   }
 
   const item40 = byNumber.get(40);
-  if (!item40) throw new Error('독해 40번 문항 데이터가 없습니다.');
-  parts.push(renderSummaryReadingItem(item40, item40.summary ?? ''));
+  if (!item40) {
+    if (mode !== 'partial') throw new Error('독해 40번 문항 데이터가 없습니다.');
+  } else {
+    parts.push(renderSummaryReadingItem(item40, item40.summary ?? ''));
+  }
 
   const item41 = byNumber.get(41);
   const item42 = byNumber.get(42);
-  if (!item41 || !item42) throw new Error('독해 41-42번 문항 데이터가 없습니다.');
-  parts.push(renderSharedPassageGroup([item41, item42]));
+  if (!item41 || !item42) {
+    if (mode !== 'partial') throw new Error('독해 41-42번 문항 데이터가 없습니다.');
+  } else {
+    parts.push(renderSharedPassageGroup([item41, item42]));
+  }
 
   const item43 = byNumber.get(43);
   const item44 = byNumber.get(44);
   const item45 = byNumber.get(45);
-  if (!item43 || !item44 || !item45) throw new Error('독해 43-45번 문항 데이터가 없습니다.');
-  parts.push(renderSharedPassageGroup([item43, item44, item45]));
+  if (!item43 || !item44 || !item45) {
+    if (mode !== 'partial') throw new Error('독해 43-45번 문항 데이터가 없습니다.');
+  } else {
+    parts.push(renderSharedPassageGroup([item43, item44, item45]));
+  }
 
   return parts.join('');
 }

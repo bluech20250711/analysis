@@ -10,8 +10,8 @@ import CoverPage from './CoverPage';
 import ExamColumnPageView from './ExamColumnPageView';
 import AnswerKeySection from './AnswerKeySection';
 
-function ExamDocument({ examSet }: { examSet: ExamSet }) {
-  const blocks = buildExamBlocks(examSet.listening, examSet.reading);
+function ExamDocument({ examSet, mode = 'strict' }: { examSet: ExamSet; mode?: 'strict' | 'partial' }) {
+  const blocks = buildExamBlocks(examSet.listening, examSet.reading, mode);
   const pages = paginateIntoColumns(blocks, COLUMN_HEIGHT_BUDGET_PT);
 
   return (
