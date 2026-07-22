@@ -405,13 +405,27 @@ Netlify 실배포 디버깅 중 "모의고사 생성" 버튼을 누를 때마다
 - `src/components/DownloadPanel.tsx` — HWPX/PDF/MP3 각 항목을 "다운로드 버튼 또는 실패 사유" + "○○만 다시 생성" 버튼이 나란히 있는 행으로 재구성(성공/실패 여부와 무관하게 항상 재시도 가능 — 실패 시 재시도뿐 아니라, 배포를 새로 한 뒤 이미 성공한 산출물을 최신 코드로 다시 만들어보고 싶을 때도 사용 가능). 음성 재시도 버튼은 TTS API 키가 있을 때만 노출. 재시도 중에는 모든 재시도 버튼이 비활성화됨(동시 다중 재시도 방지)
 - Playwright로 검증: `localStorage`에 가짜 `examSet`을 직접 주입한 뒤 새로고침 → `DownloadPanel`이 즉시 표시되고 "HWPX만 다시 생성"/"PDF만 다시 생성" 버튼이 보이는 것, TTS 키가 없으면 "음성만 다시 생성" 버튼이 숨겨지고 TTS 키를 추가하면 나타나는 것, 버튼 클릭 시 Gemini 호출 없이 곧바로 해당 Netlify Function만 요청되는 것(네트워크 탭 기준)을 확인함
 
+### 모의고사 유형별 UI 골격 (설계스펙 12절 신규 기능 — 이번 단계는 UI만, 실제 생성 로직은 다음 단계)
+
+> ⚠️ 여기서도 `docs/수능영어_자동출제앱_설계스펙.md` 12절(향후 확장 아이디어)에는 "모의고사 유형별"/"미니수능" 관련 내용이 없다(`git log --all`로도 확인 — 여전히 5줄짜리 원래 목록뿐). 사용자가 채팅으로 직접 전달한 요구사항과 참고 스크린샷(구글 AI 스튜디오로 만든 참고 앱 화면) 기준으로 구현했다.
+
+메인 화면 상단에 "모의고사 1세트"(기존 45문항 고정 생성, 그대로 유지) / "모의고사 유형별"(신규, 이번에 UI 구현) / "미니수능"(신규, 카드만 — 버튼 비활성) 3분기 카드를 추가하고, "모의고사 유형별" 카드를 클릭하면 문항 번호를 체크해서 그 문항만 생성 요청하는 패널이 펼쳐진다. **이번 단계는 UI 골격만** — "생성 시작"을 눌러도 실제 Gemini 호출 없이 선택된 문항 번호를 콘솔에 로그로만 남긴다(다음 단계에서 실제 생성 로직 연결 예정).
+
+- `src/lib/examItemTypes.ts`(신규) — `LISTENING_ITEM_TYPES`(1-17)/`READING_ITEM_TYPES`(18-45) 번호별 유형명 정적 목록. 듣기는 사용자가 채팅으로 직접 확정한 명칭(Part1 표 원문을 일부 다듬은 버전 — 8번 "언급 유무"는 원문 "언급되지 않은 것", 16-17번은 원문이 "긴 담화(공통 지문 2문항)" 하나였던 것을 번호별로 나눔), 독해는 `수능영어_모의고사_출제_프롬프트.md`의 [Part 2] 표 "문항 유형" 컬럼 원문 그대로 사용(41-42/43-45처럼 표에서 번호 범위로 묶인 항목은 번호별 세부 유형으로 나눠서 표시 — 예: 41 "장문 독해(제목 고르기)", 42 "장문 독해(어휘 적합성)")
+- `src/components/ExamModeCards.tsx`(신규) — 3분기 카드. "미니수능" 버튼은 `disabled` 고정(다음 업데이트에서 구현 예정 안내)
+- `src/components/TypeSelectionPanel.tsx`(신규) — 학년/난이도 드롭다운 + 문제수(체크 개수 자동 계산, 실시간), 빠른선택 4버튼(듣기만 전체/독해만 전체/전체 선택/모두 해제), 듣기(1-17)·독해(18-45) 체크박스 그리드(`examItemTypes.ts` 사용, 긴 유형명은 CSS로 말줄임 처리하고 `title` 속성으로 전체 텍스트 제공), 이름 입력(기본값 `AI유형 ` + 오늘 날짜 6자리, `YYMMDD`), "생성 시작" 버튼(체크 0개면 비활성화 — 클릭 시 선택된 번호 배열을 `console.log`만 함)
+- `App.tsx` — `activeMode: 'full-set' | 'by-type' | null` state 추가(기본값 `null`, 카드만 보이는 초기 화면). 기존 `ExamOptionsForm` + 전체 파이프라인(Gemini→오디오/HWPX/PDF)은 **로직 변경 없이** `activeMode === 'full-set'`일 때만 보이도록 감싸기만 함 — "모의고사 1세트" 카드는 기존에 이미 동작하던 화면을 보여주는 진입점 역할만 한다
+
+**로컬 검증**: Playwright로 확인 — 초기 화면엔 카드 3개만 보이고 패널 없음, "미니수능 생성" 버튼이 `disabled`인 것, "유형 골라 생성" 클릭 시 유형별 패널이 나타나고(카드 테두리 강조) 기존 "출제 옵션" 폼은 숨겨지는 것, 문항 체크 시 "문제수"가 실시간으로 갱신되는 것(예: 13번 체크 → 1, "듣기만 전체" → 17), "생성 시작" 클릭 시 콘솔에 선택된 번호 배열이 찍히는 것, 체크 0개일 때 버튼이 비활성화되는 것, "1세트 생성" 클릭 시 원래 화면(출제 옵션 폼)으로 정상 복귀하는 것을 확인함. 스크린샷으로 참고 이미지와 레이아웃이 유사한지도 육안 확인.
+
 ## 폴더 구조 (목표)
 
 ```
 src/
-├── components/        # ApiKeySettings, ExamOptionsForm, GenerationProgress, DownloadPanel, ListeningAudioPanel
+├── components/        # ApiKeySettings, ExamOptionsForm, GenerationProgress, DownloadPanel, ListeningAudioPanel, ExamModeCards, TypeSelectionPanel
 ├── lib/
 │   ├── apiKeyStorage.ts  # localStorage 기반 Gemini/TTS 키 read/write
+│   ├── examItemTypes.ts  # 유형별 생성 UI용 문항 번호별 유형명 정적 목록(듣기 1-17/독해 18-45)
 │   ├── gemini.ts       # Gemini 호출(사용자 apiKey 인자) + JSON 파싱/검증 + onProgress 콜백
 │   ├── apiClient.ts    # 브라우저 → Netlify Functions fetch 래퍼(generate-audio-background/get-listening-clips-status/merge-audio-background/get-merged-audio/export-hwpx/export-pdf)
 │   ├── audioOrchestration.ts  # v2: buildListeningClipUnits/generateListeningClips/regenerateFailedListeningClips/collectKnownClipIds/mergeListeningAudio — 문항별 개별 생성 + 수동 병합
