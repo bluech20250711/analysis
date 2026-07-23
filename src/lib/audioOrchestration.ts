@@ -1,5 +1,6 @@
 import { buildDirectionLineId, buildListeningMergePlan, buildTtsLineId } from './audio/buildMergePlan';
 import type { ListeningClipsStatusMap } from './audio/listeningClipsStore';
+import { numberToKoreanReading } from './koreanNumber';
 import type { ListeningItem } from './types';
 import type { TtsLineRequest } from './tts/types';
 import {
@@ -24,8 +25,10 @@ export interface ListeningClipUnit {
   lines: TtsLineRequest[];
 }
 
+// "1번" 대신 "일번"처럼 숫자를 한글로 읽어 TTS가 아라비아 숫자를 영어식으로 읽거나
+// 어색하게 읽는 문제를 방지한다(실제 수능 방송과 동일한 방식).
 function directionTextFor(item: ListeningItem): string {
-  return `${item.number}번, ${item.instruction}`;
+  return `${numberToKoreanReading(item.number)}번, ${item.instruction}`;
 }
 
 // 문항별로 독립적으로 생성할 단위 목록을 순서대로(인트로 → 1~17번 중 실제 대사가 있는 문항 →
