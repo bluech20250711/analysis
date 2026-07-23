@@ -2,7 +2,12 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { buildListeningMergePlan, buildTtsLineId, resolveMergeSegments } from '../src/lib/audio/buildMergePlan';
+import {
+  buildDirectionLineId,
+  buildListeningMergePlan,
+  buildTtsLineId,
+  resolveMergeSegments,
+} from '../src/lib/audio/buildMergePlan';
 import { mergeSegmentsToMp3 } from '../src/lib/audio/ffmpegMerge';
 import { PAIR_1617_GAP_SECONDS, SIGNAL_TONE_SECONDS, STANDARD_GAP_SECONDS, INTRO_TO_FIRST_ITEM_GAP_SECONDS } from '../src/lib/audio/timing';
 import type { ListeningItem } from '../src/lib/types';
@@ -106,6 +111,9 @@ async function main() {
   clipsById.set('outro', await synthesizeFakeLineClip(200, 1));
 
   for (const item of testListening) {
+    if (item.script.length === 0) continue; // 17번처럼 공유 지문이라 script가 빈 문항은 디렉션도 없음(16번에 포함)
+    // 각 문항 맨 앞의 "N번, {지시문}" 디렉션 안내 음성(issue 3 — 실제 TTS 대신 가짜 클립).
+    clipsById.set(buildDirectionLineId(item.number), await synthesizeFakeLineClip(150 + item.number * 20, 1));
     for (let i = 0; i < item.script.length; i++) {
       const freq = 300 + item.number * 20 + i * 5;
       clipsById.set(buildTtsLineId(item.number, i), await synthesizeFakeLineClip(freq, 1));

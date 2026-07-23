@@ -1,4 +1,4 @@
-import { extractTopics, generateItemUnit } from './gemini';
+import { extractTopics, generateItemUnit, regenerateItemUnitWithEdit } from './gemini';
 import { buildGenerationUnits, type GenerationUnit } from './generationUnits';
 import type { ExamOptions, ListeningItem, ReadingItem } from './types';
 
@@ -67,4 +67,38 @@ export async function regenerateFailedItems(
 ): Promise<GeneratedItems> {
   const units = buildGenerationUnits(failedNumbers);
   return generateExamItems(apiKey, options, units, onStatusChange, usedTopicsSoFar);
+}
+
+// 카드뷰 "문항 수정" — itemNumber 하나만 요청받아도 짝 그룹(16-17/41-42/43-45)이면
+// buildGenerationUnits가 자동으로 그룹 전체를 묶어준다. currentListening/currentReading에서
+// 그 유닛에 해당하는 현재 문항들을 찾아 "수정 컨텍스트"로 함께 넘긴다(gemini.ts의
+// regenerateItemUnitWithEdit 참고). 실패 시 예외를 그대로 던지므로, 호출자는 catch에서
+// 기존 문항 데이터를 그대로 유지하면 된다(성공했을 때만 반환값으로 교체).
+export async function regenerateItemWithEdit(
+  apiKey: string,
+  options: ExamOptions,
+  itemNumber: number,
+  currentListening: ListeningItem[],
+  currentReading: ReadingItem[],
+  editInstruction: string,
+  usedTopicsSoFar: string[] = [],
+): Promise<GeneratedItems> {
+  const [unit] = buildGenerationUnits([itemNumber]);
+  const currentItems: (ListeningItem | ReadingItem)[] =
+    unit.kind === 'listening'
+      ? currentListening.filter((item) => unit.numbers.includes(item.number))
+      : currentReading.filter((item) => unit.numbers.includes(item.number));
+
+  const result = await regenerateItemUnitWithEdit(
+    apiKey,
+    options,
+    unit,
+    currentItems,
+    editInstruction,
+    usedTopicsSoFar,
+  );
+
+  return unit.kind === 'listening'
+    ? { listening: result as ListeningItem[], reading: [] }
+    : { listening: [], reading: result as ReadingItem[] };
 }

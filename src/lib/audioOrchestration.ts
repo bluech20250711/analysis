@@ -1,4 +1,4 @@
-import { buildListeningMergePlan, buildTtsLineId } from './audio/buildMergePlan';
+import { buildDirectionLineId, buildListeningMergePlan, buildTtsLineId } from './audio/buildMergePlan';
 import type { ListeningClipsStatusMap } from './audio/listeningClipsStore';
 import type { ListeningItem } from './types';
 import type { TtsLineRequest } from './tts/types';
@@ -24,25 +24,44 @@ export interface ListeningClipUnit {
   lines: TtsLineRequest[];
 }
 
+function directionTextFor(item: ListeningItem): string {
+  return `${item.number}번, ${item.instruction}`;
+}
+
 // 문항별로 독립적으로 생성할 단위 목록을 순서대로(인트로 → 1~17번 중 실제 대사가 있는 문항 →
 // 아웃트로) 만든다. 16-17번처럼 공통 지문이라 script가 빈 문항은 생성 대상에서 제외한다
 // (병합 플랜도 동일하게 건너뛴다 — buildMergePlan.ts 참고). 화면에는 1~17번만 표시하지만
 // 인트로/아웃트로도 동일한 생성/재시도 로직을 그대로 타도록 이 목록에 포함시킨다.
+//
+// 각 유닛의 대사 맨 앞에는 "N번, {instruction}" 디렉션 안내가 항상 먼저 온다(실제
+// 수능처럼 화자 음성과 무관하게 고정된 Narrator 목소리로 통일). 16번은 담화가 시작되기
+// 전에 16번과 17번 지시문을 이어서 안내한다 — 17번은 지문을 공유해 별도 생성 단위가
+// 없으므로, 17번의 디렉션도 16번 유닛에 함께 포함시켜야 놓치지 않는다.
 export function buildListeningClipUnits(listening: ListeningItem[]): ListeningClipUnit[] {
   const sorted = [...listening].sort((a, b) => a.number - b.number);
+  const byNumber = new Map(sorted.map((item) => [item.number, item]));
   const units: ListeningClipUnit[] = [
     { itemKey: INTRO_ITEM_KEY, lines: [{ id: INTRO_ITEM_KEY, speaker: 'Narrator', text: INTRO_TEXT }] },
   ];
 
   for (const item of sorted) {
     if (item.script.length === 0) continue;
+
+    const item17 = item.number === 16 ? byNumber.get(17) : undefined;
+    const directionText = item17
+      ? `${directionTextFor(item)} ${directionTextFor(item17)}`
+      : directionTextFor(item);
+
     units.push({
       itemKey: String(item.number),
-      lines: item.script.map((line, i) => ({
-        id: buildTtsLineId(item.number, i),
-        speaker: line.speaker,
-        text: line.line,
-      })),
+      lines: [
+        { id: buildDirectionLineId(item.number), speaker: 'Narrator', text: directionText },
+        ...item.script.map((line, i) => ({
+          id: buildTtsLineId(item.number, i),
+          speaker: line.speaker,
+          text: line.line,
+        })),
+      ],
     });
   }
 
