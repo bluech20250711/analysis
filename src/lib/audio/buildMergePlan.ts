@@ -8,6 +8,13 @@ export function buildTtsLineId(itemNumber: number, lineIndex: number): string {
   return `${itemNumber}-${lineIndex}`;
 }
 
+// 문항 맨 앞에 붙는 디렉션("N번, {instruction}") 안내 음성의 클립 id.
+// itemKeyFromClipId가 첫 "-" 앞부분만 잘라 itemKey를 역산하므로("16-direction" → "16"),
+// 별도 파싱 로직 변경 없이 기존 구조에 그대로 끼워 넣을 수 있다.
+export function buildDirectionLineId(itemNumber: number): string {
+  return `${itemNumber}-direction`;
+}
+
 // 클립 id("1-0", "intro", "outro")로부터 그 클립이 속한 문항 단위 키("1", "intro", "outro")를
 // 역산한다. merge-audio-background.ts가 병합 플랜(segments)만 보고 Netlify Blobs에서 어떤
 // listening-clip-{itemKey} 키들을 읽어와야 하는지 알아낼 때 사용한다(설계스펙 v2 — 문항별
@@ -53,6 +60,8 @@ export function buildListeningMergePlan(input: MergePlanInput): MergeSegmentSpec
     if (item.script.length === 0) continue;
 
     segments.push({ kind: 'tone', seconds: SIGNAL_TONE_SECONDS });
+    // 신호음 다음, 대사보다 먼저 "N번, {지시문}" 디렉션 안내가 나온다(실제 수능처럼).
+    segments.push(clipSegmentSpec(input.knownClipIds, buildDirectionLineId(item.number)));
     item.script.forEach((_, lineIndex) => {
       segments.push(clipSegmentSpec(input.knownClipIds, buildTtsLineId(item.number, lineIndex)));
     });

@@ -13,6 +13,7 @@ import { extractTopics } from './lib/gemini';
 import {
   generateExamItems,
   regenerateFailedItems,
+  regenerateItemWithEdit,
   type ItemStatusEntry,
 } from './lib/examGenerationOrchestration';
 import { buildGenerationUnits } from './lib/generationUnits';
@@ -104,6 +105,13 @@ function App() {
   const [generatedReading, setGeneratedReading] = useState<ReadingItem[]>([]);
   const [genOptions, setGenOptions] = useState<ExamOptions | null>(null);
   const [genTitle, setGenTitle] = useState<string>('모의고사');
+
+  // 카드뷰 "문항 수정" — 번호별(짝 그룹이면 그룹 전체) 재생성 상태. 성공하면 해당 번호의
+  // 항목을 지워 카드가 idle로 돌아가게 한다(ExamItemCard가 loading→undefined 전이를
+  // 편집 상자 자동 닫힘 신호로 사용).
+  const [editStatusMap, setEditStatusMap] = useState<Record<number, { status: 'loading' | 'error'; message?: string }>>(
+    {},
+  );
 
   // 설계스펙 v2(5절, 문항별 개별 생성) — 듣기 음성은 더 이상 위 파이프라인의 일부가 아니라
   // 문항별로 독립 진행되는 별도 상태다. audioSessionId는 examSet과 함께 저장되어 새로고침
@@ -383,6 +391,97 @@ function App() {
     void runClipGeneration(audioSessionId, ttsApiKey, [unit]);
   };
 
+  // "실패만 재생성"과 별개인 "전체 재생성" — 이미 완료(done)된 문항까지 포함해 전체를
+  // 다시 생성한다(듣기 디렉션 음성 도입처럼, 이미 생성해둔 클립을 최신 구조로 다시
+  // 만들어야 할 때 사용). runClipGeneration은 전달된 units를 그대로 순차 생성하므로
+  // 별도 백엔드 변경 없이 재사용 가능.
+  const handleRegenerateAllClips = () => {
+    if (!audioSessionId || !ttsApiKey) return;
+    void runClipGeneration(audioSessionId, ttsApiKey, listeningClipUnits);
+  };
+
+  // 카드뷰(ExamItemCard)의 "문항 수정" — 짝 문항(16-17/41-42/43-45)이면
+  // buildGenerationUnits가 자동으로 그룹 전체를 묶어 함께 재생성한다(공유 지문/대본이
+  // 바뀌면 나머지 문항의 근거도 깨질 수 있어서). 실패하면 examSet은 건드리지 않고
+  // 에러 메시지만 해당 카드(들)에 남긴다 — 성공했을 때만 배열을 교체하므로 원본이
+  // 항상 보존된다.
+  const handleSubmitItemEdit = async (itemNumber: number, instruction: string) => {
+    if (!examSet) return;
+    const geminiApiKey = getGeminiApiKey();
+    if (!geminiApiKey) {
+      setNotice('API 키를 먼저 입력해주세요.');
+      setView('settings');
+      return;
+    }
+
+    const [unit] = buildGenerationUnits([itemNumber]);
+    setEditStatusMap((prev) => {
+      const next = { ...prev };
+      for (const n of unit.numbers) next[n] = { status: 'loading' as const };
+      return next;
+    });
+
+    try {
+      // genOptions는 이번 세션에서 직접 생성했을 때만 채워진다 — 새로고침 후 캐시에서
+      // 복원된 examSet을 수정하는 경우엔 examSet.metadata로 최대한 채운 기본값으로 대체.
+      const options: ExamOptions =
+        genOptions ?? {
+          ...DEFAULT_EXAM_OPTIONS,
+          grade: examSet.metadata.grade,
+          academyBranch: examSet.metadata.academyBranch,
+        };
+      const usedTopics =
+        unit.kind === 'reading'
+          ? extractTopics(examSet.reading.filter((item) => !unit.numbers.includes(item.number)))
+          : [];
+
+      const result = await regenerateItemWithEdit(
+        geminiApiKey,
+        options,
+        itemNumber,
+        examSet.listening,
+        examSet.reading,
+        instruction,
+        usedTopics,
+      );
+
+      setExamSet((prev) => {
+        if (!prev) return prev;
+        const replaced = new Set(unit.numbers);
+        const merged: ExamSet = {
+          ...prev,
+          listening:
+            unit.kind === 'listening'
+              ? [...prev.listening.filter((item) => !replaced.has(item.number)), ...result.listening].sort(
+                  (a, b) => a.number - b.number,
+                )
+              : prev.listening,
+          reading:
+            unit.kind === 'reading'
+              ? [...prev.reading.filter((item) => !replaced.has(item.number)), ...result.reading].sort(
+                  (a, b) => a.number - b.number,
+                )
+              : prev.reading,
+        };
+        saveExamSet(merged);
+        return merged;
+      });
+
+      setEditStatusMap((prev) => {
+        const next = { ...prev };
+        for (const n of unit.numbers) delete next[n];
+        return next;
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '문항 수정 중 알 수 없는 오류가 발생했습니다.';
+      setEditStatusMap((prev) => {
+        const next = { ...prev };
+        for (const n of unit.numbers) next[n] = { status: 'error' as const, message };
+        return next;
+      });
+    }
+  };
+
   // 17개 문항(+인트로/아웃트로) 전부 성공했을 때만 ListeningAudioPanel에서 활성화되는 버튼.
   const handleMergeAudio = async () => {
     if (!audioSessionId || !examSet) return;
@@ -499,6 +598,7 @@ function App() {
                     .map((item) => {
                       const itemKey = String(item.number);
                       const clipUnit = listeningClipUnits.find((u) => u.itemKey === itemKey);
+                      const editEntry = editStatusMap[item.number];
                       return (
                         <ExamItemCard
                           key={item.number}
@@ -509,6 +609,9 @@ function App() {
                             clipUnit && ttsApiKey ? () => handleGenerateOneClip(itemKey) : undefined
                           }
                           audioBusy={clipGenerating}
+                          editStatus={editEntry?.status}
+                          editErrorMessage={editEntry?.message}
+                          onSubmitEdit={(instruction) => void handleSubmitItemEdit(item.number, instruction)}
                         />
                       );
                     })}
@@ -527,6 +630,7 @@ function App() {
                     merging={audioMerging}
                     mergeFailedReason={mergeFailedReason}
                     onRetryFailed={handleRetryFailedClips}
+                    onRegenerateAll={handleRegenerateAllClips}
                     onMerge={handleMergeAudio}
                   />
                 )}

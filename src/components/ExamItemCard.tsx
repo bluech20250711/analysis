@@ -1,7 +1,9 @@
+import { useEffect, useRef, useState } from 'react';
 import type { Choice, ListeningItem, ReadingItem } from '../lib/types';
 import { LISTENING_ITEM_TYPES, READING_ITEM_TYPES } from '../lib/examItemTypes';
 
 export type ClipButtonStatus = 'pending' | 'done' | 'error';
+export type EditButtonStatus = 'loading' | 'error';
 
 interface ExamItemCardProps {
   item: ListeningItem | ReadingItem;
@@ -11,6 +13,12 @@ interface ExamItemCardProps {
   clipMessage?: string;
   onGenerateAudio?: () => void;
   audioBusy: boolean;
+  // "문항 수정" — undefined면 loading/error 상태가 없다는 뜻(대기 중). 짝 문항
+  // (16-17/41-42/43-45)은 그룹 전체가 함께 재생성되므로, 같은 그룹의 다른 카드도
+  // 동시에 'loading'이 될 수 있다(App.tsx가 유닛 단위로 상태를 반영).
+  editStatus?: EditButtonStatus;
+  editErrorMessage?: string;
+  onSubmitEdit?: (instruction: string) => void;
 }
 
 const CIRCLED = ['①', '②', '③', '④', '⑤'] as const;
@@ -40,7 +48,17 @@ function ChoiceInterpretationLine({ choice }: { choice: Choice }) {
   );
 }
 
-function CardHeader({ item, typeLabel }: { item: ListeningItem | ReadingItem; typeLabel: string }) {
+function CardHeader({
+  item,
+  typeLabel,
+  editDisabled,
+  onToggleEdit,
+}: {
+  item: ListeningItem | ReadingItem;
+  typeLabel: string;
+  editDisabled: boolean;
+  onToggleEdit?: () => void;
+}) {
   return (
     <div className="flex items-start justify-between gap-3">
       <p className="font-medium text-gray-800">
@@ -54,13 +72,66 @@ function CardHeader({ item, typeLabel }: { item: ListeningItem | ReadingItem; ty
         )}
         <button
           type="button"
-          disabled
-          title="문항 수정 기능은 다음 업데이트에서 제공됩니다"
-          className="rounded-lg border border-gray-200 text-gray-400 text-xs px-2 py-1 cursor-not-allowed whitespace-nowrap"
+          onClick={onToggleEdit}
+          disabled={!onToggleEdit || editDisabled}
+          title={onToggleEdit ? undefined : '문항 수정 기능을 사용할 수 없습니다'}
+          className="rounded-lg border border-gray-300 text-gray-600 text-xs px-2 py-1 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
         >
           문항 수정
         </button>
       </div>
+    </div>
+  );
+}
+
+function EditPanel({
+  instruction,
+  onChangeInstruction,
+  onSubmit,
+  onCancel,
+  status,
+  errorMessage,
+}: {
+  instruction: string;
+  onChangeInstruction: (value: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  status?: EditButtonStatus;
+  errorMessage?: string;
+}) {
+  const loading = status === 'loading';
+  return (
+    <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
+      {status === 'error' && errorMessage && (
+        <p className="text-sm text-red-600">재생성 실패: {errorMessage} (기존 문항은 그대로 유지됩니다)</p>
+      )}
+      <textarea
+        value={instruction}
+        onChange={(e) => onChangeInstruction(e.target.value)}
+        disabled={loading}
+        placeholder="예: 선택지를 더 헷갈리게 만들어줘 / 지문을 여행 소재로 바꿔줘"
+        rows={2}
+        className="w-full text-sm rounded-lg border border-gray-300 px-3 py-2 disabled:opacity-60"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={loading || instruction.trim().length === 0}
+          className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {loading ? '재생성 중…' : '재생성'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={loading}
+          className="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          취소
+        </button>
+      </div>
+      {loading && <p className="text-xs text-gray-400">짝 문항(16-17/41-42/43-45)이면 함께 재생성됩니다.</p>}
     </div>
   );
 }
@@ -141,13 +212,57 @@ function ChoiceInterpretations({ item }: { item: ListeningItem | ReadingItem }) 
 // ReadingItem 데이터를 그대로 렌더링한다(별도 데이터 추가 없이 가능). 정답/해설/해석/
 // 선택지해석을 전부 본문에 노출하는 "출제 검수용" 카드라, 정답을 각주/별도 섹션에
 // 숨기는 기존 시험지 HWPX/PDF(exam.hwpx/exam.pdf)와는 의도적으로 다르다.
-function ExamItemCard({ item, clipStatus, clipMessage, onGenerateAudio, audioBusy }: ExamItemCardProps) {
+function ExamItemCard({
+  item,
+  clipStatus,
+  clipMessage,
+  onGenerateAudio,
+  audioBusy,
+  editStatus,
+  editErrorMessage,
+  onSubmitEdit,
+}: ExamItemCardProps) {
   const listening = isListeningItem(item);
   const typeLabel = TYPE_LABELS.get(item.number) ?? '';
 
+  const [editOpen, setEditOpen] = useState(false);
+  const [instruction, setInstruction] = useState('');
+  const prevEditStatus = useRef(editStatus);
+
+  useEffect(() => {
+    // 'loading'이었다가 상태가 사라지면(=성공, App.tsx가 완료 후 상태를 지움) 편집 상자를
+    // 자동으로 닫는다. 에러로 끝나면 메시지를 보고 다시 시도할 수 있게 열어둔 채로 둔다.
+    if (prevEditStatus.current === 'loading' && editStatus === undefined) {
+      setEditOpen(false);
+      setInstruction('');
+    }
+    prevEditStatus.current = editStatus;
+  }, [editStatus]);
+
+  const handleSubmit = () => {
+    if (!onSubmitEdit || instruction.trim().length === 0) return;
+    onSubmitEdit(instruction.trim());
+  };
+
   return (
     <div className="bg-white rounded-xl shadow p-5 space-y-3">
-      <CardHeader item={item} typeLabel={typeLabel} />
+      <CardHeader
+        item={item}
+        typeLabel={typeLabel}
+        editDisabled={editStatus === 'loading'}
+        onToggleEdit={onSubmitEdit ? () => setEditOpen((v) => !v) : undefined}
+      />
+
+      {editOpen && onSubmitEdit && (
+        <EditPanel
+          instruction={instruction}
+          onChangeInstruction={setInstruction}
+          onSubmit={handleSubmit}
+          onCancel={() => setEditOpen(false)}
+          status={editStatus}
+          errorMessage={editErrorMessage}
+        />
+      )}
 
       {listening && clipStatus && onGenerateAudio && (
         <AudioButton status={clipStatus} message={clipMessage} busy={audioBusy} onGenerate={onGenerateAudio} />

@@ -8,6 +8,7 @@ interface ListeningAudioPanelProps {
   merging: boolean;
   mergeFailedReason?: string;
   onRetryFailed: () => void;
+  onRegenerateAll: () => void;
   onMerge: () => void;
 }
 
@@ -28,6 +29,7 @@ function ListeningAudioPanel({
   merging,
   mergeFailedReason,
   onRetryFailed,
+  onRegenerateAll,
   onMerge,
 }: ListeningAudioPanelProps) {
   const numberedUnits = units
@@ -37,6 +39,12 @@ function ListeningAudioPanel({
   const hasFailed = units.some((unit) => statusMap[unit.itemKey]?.status === 'error');
   const allDone = units.length > 0 && units.every((unit) => statusMap[unit.itemKey]?.status === 'done');
   const busy = generating || merging;
+
+  const handleRegenerateAll = () => {
+    if (window.confirm('이미 생성된 음성을 포함해 전체 문항의 음성을 다시 생성합니다. 계속할까요?')) {
+      onRegenerateAll();
+    }
+  };
 
   return (
     <div className="bg-white rounded-xl shadow p-6 space-y-3">
@@ -67,6 +75,17 @@ function ListeningAudioPanel({
             className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {generating ? '재생성 중…' : '실패만 재생성'}
+          </button>
+        )}
+        {units.length > 0 && (
+          <button
+            type="button"
+            onClick={handleRegenerateAll}
+            disabled={busy}
+            title="이미 완료된 문항까지 포함해 전체를 처음부터 다시 생성합니다"
+            className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {generating ? '재생성 중…' : '전체 재생성'}
           </button>
         )}
         <button
