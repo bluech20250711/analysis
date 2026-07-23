@@ -1,5 +1,7 @@
 import { buildDirectionLineId, buildListeningMergePlan, buildTtsLineId } from './audio/buildMergePlan';
 import type { ListeningClipsStatusMap } from './audio/listeningClipsStore';
+import { numberToKoreanReading } from './koreanNumber';
+import { NARRATOR_SPEAKING_RATE } from './tts/voices';
 import type { ListeningItem } from './types';
 import type { TtsLineRequest } from './tts/types';
 import {
@@ -16,16 +18,35 @@ import {
 
 export const INTRO_ITEM_KEY = 'intro';
 export const OUTRO_ITEM_KEY = 'outro';
-const INTRO_TEXT = '지금부터 듣기평가를 시작합니다.';
-const OUTRO_TEXT = '이상으로 듣기평가를 마칩니다.';
+
+// 실제 수능 영어영역 듣기평가 방송 형식에 맞춘 정형 인트로. 학년 정보(예: "고3")가 있으면
+// "지금부터 고3 영어 영역..."처럼 끼워 넣는다. 숫자는 전부 한글로 미리 읽어둔다
+// (numberToKoreanReading과 동일한 원칙 — TTS가 아라비아 숫자를 어색하게 읽는 것 방지).
+function buildIntroText(gradeLabel: string): string {
+  const gradePart = gradeLabel ? `${gradeLabel} ` : '';
+  return (
+    `지금부터 ${gradePart}영어 영역 듣기 평가를 시작하겠습니다. ` +
+    '일번부터 십칠번까지는 듣고 답하는 문제입니다. ' +
+    '일번부터 십오번까지는 한 번만 들려주고, 십육번부터 십칠번까지는 두 번 들려줍니다. ' +
+    '방송을 잘 듣고 답을 하시기 바랍니다.'
+  );
+}
+
+const OUTRO_TEXT = '이상으로 영어 영역 듣기 평가를 마치겠습니다. 수고하셨습니다.';
 
 export interface ListeningClipUnit {
   itemKey: string; // "1".."17" 또는 "intro"/"outro"
   lines: TtsLineRequest[];
 }
 
+// "1번" 대신 "일번"처럼 숫자를 한글로 읽어 TTS가 아라비아 숫자를 영어식으로 읽거나
+// 어색하게 읽는 문제를 방지한다(실제 수능 방송과 동일한 방식).
 function directionTextFor(item: ListeningItem): string {
-  return `${item.number}번, ${item.instruction}`;
+  return `${numberToKoreanReading(item.number)}번, ${item.instruction}`;
+}
+
+function narratorLine(id: string, text: string): TtsLineRequest {
+  return { id, speaker: 'Narrator', text, speakingRate: NARRATOR_SPEAKING_RATE };
 }
 
 // 문항별로 독립적으로 생성할 단위 목록을 순서대로(인트로 → 1~17번 중 실제 대사가 있는 문항 →
@@ -35,13 +56,15 @@ function directionTextFor(item: ListeningItem): string {
 //
 // 각 유닛의 대사 맨 앞에는 "N번, {instruction}" 디렉션 안내가 항상 먼저 온다(실제
 // 수능처럼 화자 음성과 무관하게 고정된 Narrator 목소리로 통일). 16번은 담화가 시작되기
-// 전에 16번과 17번 지시문을 이어서 안내한다 — 17번은 지문을 공유해 별도 생성 단위가
-// 없으므로, 17번의 디렉션도 16번 유닛에 함께 포함시켜야 놓치지 않는다.
-export function buildListeningClipUnits(listening: ListeningItem[]): ListeningClipUnit[] {
+// 전에 "16-17번은 다음을 듣고 물음에 답하시오" 전환 안내 → 16번·17번 지시문을 순서대로
+// 안내한다 — 17번은 지문을 공유해 별도 생성 단위가 없으므로, 17번의 디렉션도 16번
+// 유닛에 함께 포함시켜야 놓치지 않는다. gradeLabel은 인트로 문구에 학년을 끼워 넣는 용도
+// (예: examSet.metadata.grade — "고3").
+export function buildListeningClipUnits(listening: ListeningItem[], gradeLabel = ''): ListeningClipUnit[] {
   const sorted = [...listening].sort((a, b) => a.number - b.number);
   const byNumber = new Map(sorted.map((item) => [item.number, item]));
   const units: ListeningClipUnit[] = [
-    { itemKey: INTRO_ITEM_KEY, lines: [{ id: INTRO_ITEM_KEY, speaker: 'Narrator', text: INTRO_TEXT }] },
+    { itemKey: INTRO_ITEM_KEY, lines: [narratorLine(INTRO_ITEM_KEY, buildIntroText(gradeLabel))] },
   ];
 
   for (const item of sorted) {
@@ -49,13 +72,13 @@ export function buildListeningClipUnits(listening: ListeningItem[]): ListeningCl
 
     const item17 = item.number === 16 ? byNumber.get(17) : undefined;
     const directionText = item17
-      ? `${directionTextFor(item)} ${directionTextFor(item17)}`
+      ? `${numberToKoreanReading(item.number)}번과 ${numberToKoreanReading(item17.number)}번은 다음을 듣고 물음에 답하시오. ${directionTextFor(item)} ${directionTextFor(item17)}`
       : directionTextFor(item);
 
     units.push({
       itemKey: String(item.number),
       lines: [
-        { id: buildDirectionLineId(item.number), speaker: 'Narrator', text: directionText },
+        narratorLine(buildDirectionLineId(item.number), directionText),
         ...item.script.map((line, i) => ({
           id: buildTtsLineId(item.number, i),
           speaker: line.speaker,
@@ -65,7 +88,7 @@ export function buildListeningClipUnits(listening: ListeningItem[]): ListeningCl
     });
   }
 
-  units.push({ itemKey: OUTRO_ITEM_KEY, lines: [{ id: OUTRO_ITEM_KEY, speaker: 'Narrator', text: OUTRO_TEXT }] });
+  units.push({ itemKey: OUTRO_ITEM_KEY, lines: [narratorLine(OUTRO_ITEM_KEY, OUTRO_TEXT)] });
 
   return units;
 }

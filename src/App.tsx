@@ -127,7 +127,7 @@ function App() {
     return fresh;
   });
   const [listeningClipUnits, setListeningClipUnits] = useState<ListeningClipUnit[]>(() =>
-    examSet ? buildListeningClipUnits(examSet.listening) : [],
+    examSet ? buildListeningClipUnits(examSet.listening, examSet.metadata.grade) : [],
   );
   const [clipStatusMap, setClipStatusMap] = useState<ListeningClipsStatusMap>({});
   const [clipGenerating, setClipGenerating] = useState(false);
@@ -199,7 +199,7 @@ function App() {
     const sessionId = crypto.randomUUID();
     saveAudioSessionId(sessionId);
     setAudioSessionId(sessionId);
-    const units = buildListeningClipUnits(generated.listening);
+    const units = buildListeningClipUnits(generated.listening, generated.metadata.grade);
     setListeningClipUnits(units);
 
     if (ttsApiKey && units.length > 0) {
