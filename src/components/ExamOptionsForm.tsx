@@ -53,6 +53,7 @@ function ExamOptionsForm({ initialOptions, onSubmit, disabled }: ExamOptionsForm
             onChange={(e) => setGrade(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
+            <option value="중3">중3</option>
             <option value="고1">고1</option>
             <option value="고2">고2</option>
             <option value="고3">고3</option>
