@@ -5,8 +5,10 @@ import type { ItemStatusEntry } from '../lib/examGenerationOrchestration';
 import type { ExamOptions } from '../lib/types';
 import ItemGenerationStatus from './ItemGenerationStatus';
 
-const GRADE_OPTIONS = ['고1', '고2', '고3'];
-const DIFFICULTY_OPTIONS = ['고1 학습 수준', '고2 학습 수준', '고3 수능 실전 수준', '고3 최고난도(N제)'];
+const GRADE_OPTIONS = ['중3', '고1', '고2', '고3'];
+const DIFFICULTY_OPTIONS = ['중3 학습 수준', '고1 학습 수준', '고2 학습 수준', '고3 수능 실전 수준', '고3 최고난도(N제)'];
+const DEFAULT_GRADE_INDEX = GRADE_OPTIONS.indexOf('고3');
+const DEFAULT_DIFFICULTY_INDEX = DIFFICULTY_OPTIONS.indexOf('고3 수능 실전 수준');
 
 function formatDefaultName(): string {
   const now = new Date();
@@ -31,8 +33,8 @@ interface TypeSelectionPanelProps {
 // 신규 기능). 체크된 번호는 App.tsx의 handleGenerateItems로 전달돼 실제 Gemini 호출로
 // 이어진다(짝 문항 16-17/41-42/43-45는 App.tsx가 buildGenerationUnits로 자동 확장).
 function TypeSelectionPanel({ genNumbers, genStatusMap, generating, onGenerate, onRetryFailed }: TypeSelectionPanelProps) {
-  const [grade, setGrade] = useState(GRADE_OPTIONS[2]);
-  const [difficulty, setDifficulty] = useState(DIFFICULTY_OPTIONS[2]);
+  const [grade, setGrade] = useState(GRADE_OPTIONS[DEFAULT_GRADE_INDEX]);
+  const [difficulty, setDifficulty] = useState(DIFFICULTY_OPTIONS[DEFAULT_DIFFICULTY_INDEX]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [name, setName] = useState(() => formatDefaultName());
 
