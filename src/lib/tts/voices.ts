@@ -12,14 +12,17 @@ import type { Speaker } from '../types';
 // 두 가지 문제가 함께 발견되어 한 번에 수정했다.
 //
 // 여성 Chirp3-HD 후보(공식 스타일 라벨 기준, 다른 톤 원하면 name만 교체):
-//   - Erinome(Clear, 또렷함) — "정확한 발음" 요구에 가장 부합해 채택
+//   - Aoede(Breezy, 경쾌함) — 참고 앱(Gemini API TTS 멀티 화자)이 내레이터로 쓰는 보이스와
+//     이름이 같아(30개 공통 페르소나가 Cloud TTS Chirp3-HD/Gemini API TTS 양쪽에 동일하게
+//     존재) 채택, 실사용 청취 후 톤 비교용 1차 실험
+//   - Erinome(Clear, 또렷함) — "정확한 발음" 요구에 가장 부합, 이전에 쓰던 후보
 //   - Kore(Firm, 신뢰감) — 정보 전달형, en-US 버전을 W 화자로 이미 검증해서 씀
 //   - Gacrux(Mature, 성숙함) — 더 격식 있는 톤 원하면
 //   - Vindemiatrix(Gentle, 부드러움) — 더 부드러운 톤 원하면
 export const VOICE_MAP: Record<Speaker, { languageCode: string; name: string }> = {
   M: { languageCode: 'en-US', name: 'en-US-Chirp3-HD-Charon' },
   W: { languageCode: 'en-US', name: 'en-US-Chirp3-HD-Kore' },
-  Narrator: { languageCode: 'ko-KR', name: 'ko-KR-Chirp3-HD-Erinome' },
+  Narrator: { languageCode: 'ko-KR', name: 'ko-KR-Chirp3-HD-Aoede' },
 };
 
 // 수능 듣기 표준 속도(약 145~155 wpm)에 맞춘 재생 속도 배율.
